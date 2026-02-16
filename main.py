@@ -2049,7 +2049,8 @@ class PasswordVault:
         dlg.geometry(f"{w}x{h}+{cx}+{cy}")
 
     def run(self):
-        if self.settings.get("start_minimized", False):
+        # Only start minimized if vault already exists (not first launch)
+        if self.settings.get("start_minimized", False) and os.path.exists(DATA_FILE):
             self.root.after(200, self.minimize_to_widget)
         self.root.mainloop()
 
