@@ -1,7 +1,7 @@
 ; ── Password Vault Installer Script (Inno Setup) ──
 
 #define MyAppName "Password Vault"
-#define MyAppVersion "1.0"
+#define MyAppVersion "2.0"
 #define MyAppPublisher "Eslam Atwa"
 #define MyAppExeName "PasswordVault.exe"
 
