@@ -38,10 +38,47 @@ DATA_FILE = os.path.join(DATA_DIR, "vault.dat")
 SALT_FILE = os.path.join(DATA_DIR, "vault.salt")
 APP_DIR = _EXE_DIR  # for icon.ico lookup
 
-# ─── Constants ────────────────────────────────────────────────
+# ─── Constants (defaults, overridden by settings) ─────────────
 AUTO_LOCK_MINUTES = 5
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_SECONDS = 30
+
+# ─── Settings Persistence ────────────────────────────────────
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+
+DEFAULT_SETTINGS = {
+    "auto_lock_minutes": 5,
+    "gen_length": 16,
+    "gen_upper": True,
+    "gen_lower": True,
+    "gen_digits": True,
+    "gen_symbols": True,
+    "start_minimized": False,
+    "default_card_color": "default",
+    "max_login_attempts": 5,
+    "lockout_seconds": 30,
+    "clipboard_clear_seconds": 0,   # 0 = off
+}
+
+
+def load_settings():
+    """Load settings from JSON, falling back to defaults."""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            merged = dict(DEFAULT_SETTINGS)
+            merged.update(saved)
+            return merged
+        except Exception:
+            pass
+    return dict(DEFAULT_SETTINGS)
+
+
+def save_settings(settings):
+    """Persist settings to JSON."""
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
 
 # ─── Category Emoji Map ──────────────────────────────────────
 CAT_EMOJIS = {
@@ -532,6 +569,13 @@ class MiniVault(ctk.CTkToplevel):
         orig_fg = btn.cget("fg_color")
         btn.configure(text="✅ Copied!", fg_color=GREEN)
         self.after(1000, lambda: self._safe_cfg(btn, orig, orig_fg))
+        # Auto-clear clipboard via main app
+        clear_sec = self.app.settings.get("clipboard_clear_seconds", 0)
+        if clear_sec > 0:
+            if self.app._clipboard_timer:
+                self.app.root.after_cancel(self.app._clipboard_timer)
+            self.app._clipboard_timer = self.app.root.after(
+                clear_sec * 1000, self.app._clear_clipboard)
 
     @staticmethod
     def _safe_cfg(btn, t, fg):
@@ -601,6 +645,10 @@ class PasswordVault:
         self._lockout_until = 0
         self._idle_timer = None
         self._main_frame = None
+        self._clipboard_timer = None
+
+        # Load persistent settings
+        self.settings = load_settings()
 
         ctk.set_appearance_mode("dark")
 
@@ -641,7 +689,9 @@ class PasswordVault:
     def _reset_idle(self, event=None):
         if self._idle_timer:
             self.root.after_cancel(self._idle_timer)
-        self._idle_timer = self.root.after(AUTO_LOCK_MINUTES * 60 * 1000, self._auto_lock)
+        mins = self.settings.get("auto_lock_minutes", AUTO_LOCK_MINUTES)
+        if mins > 0:
+            self._idle_timer = self.root.after(mins * 60 * 1000, self._auto_lock)
 
     def _auto_lock(self):
         self.key = None
@@ -794,15 +844,17 @@ class PasswordVault:
 
         salt = get_or_create_salt()
         self.key = derive_key(pw, salt)
+        max_att = self.settings.get("max_login_attempts", MAX_LOGIN_ATTEMPTS)
+        lock_sec = self.settings.get("lockout_seconds", LOCKOUT_SECONDS)
         try:
             self.data = load_data(self.key)
         except Exception:
             self._login_attempts += 1
-            rem = MAX_LOGIN_ATTEMPTS - self._login_attempts
-            if self._login_attempts >= MAX_LOGIN_ATTEMPTS:
-                self._lockout_until = time.time() + LOCKOUT_SECONDS
+            rem = max_att - self._login_attempts
+            if self._login_attempts >= max_att:
+                self._lockout_until = time.time() + lock_sec
                 self.error_label.configure(
-                    text=f"⚠️ Locked for {LOCKOUT_SECONDS}s")
+                    text=f"⚠️ Locked for {lock_sec}s")
                 self._login_attempts = 0
             else:
                 self.error_label.configure(
@@ -849,7 +901,7 @@ class PasswordVault:
             fg_color="transparent", hover_color=BG_TERT, corner_radius=8,
             text_color=TEXT_SEC, command=self.show_settings_menu)
         settings_btn.pack(side="right", padx=(0, 10))
-        tip(settings_btn, "Settings — Change password, lock vault")
+        tip(settings_btn, "Settings — Preferences, change password, lock vault")
 
         add_btn = ctk.CTkButton(
             top, text="＋  Add New", width=110, height=32,
@@ -906,6 +958,8 @@ class PasswordVault:
         menu = tk.Menu(self.root, tearoff=0, bg=BG_SEC, fg=TEXT_PRI,
                        activebackground=ACCENT, activeforeground="white",
                        font=("Segoe UI", 10))
+        menu.add_command(label="⚙️  Settings",
+                          command=self.show_settings_dialog)
         menu.add_command(label="🔑  Change Master Password",
                           command=self.show_change_password_dialog)
         menu.add_separator()
@@ -914,6 +968,240 @@ class PasswordVault:
             menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
         except Exception:
             pass
+
+    # ─── Settings Dialog (Full Page, iOS Style) ──────────────
+    def show_settings_dialog(self):
+        self._reset_idle()
+        DW, DH = 480, 620
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title("Settings")
+        dlg.geometry(f"{DW}x{DH}")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color=BG)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        self._center(dlg, DW, DH)
+
+        ctk.CTkLabel(dlg, text="⚙️  Settings",
+                      font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
+                      text_color=TEXT_PRI).pack(pady=(14, 6))
+
+        scroll = ctk.CTkScrollableFrame(dlg, fg_color="transparent",
+                                         scrollbar_button_color=BG_TERT)
+        scroll.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+
+        s = dict(self.settings)  # working copy
+
+        # ── helper to create a setting row ──
+        def setting_row(group, icon, label, idx=0):
+            if idx > 0:
+                ctk.CTkFrame(group, height=1, fg_color=SEPARATOR).pack(
+                    fill="x", padx=(46, 0))
+            row = ctk.CTkFrame(group, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=5)
+            lbl_w = ctk.CTkLabel(row, text=f"{icon}  {label}",
+                                   font=ctk.CTkFont(family="Segoe UI", size=12),
+                                   text_color=TEXT_PRI, anchor="w")
+            lbl_w.pack(side="left", fill="x", expand=True)
+            return row, lbl_w
+
+        # ════════════════ SECURITY ════════════════
+        g_sec = ios_group(scroll, "Security")
+
+        # — Auto-Lock Timer —
+        r, lbl = setting_row(g_sec, "🔒", "Auto-Lock", idx=0)
+        al_map = {"1 min": 1, "2 min": 2, "5 min": 5,
+                  "10 min": 10, "15 min": 15, "30 min": 30, "Never": 0}
+        al_rev = {v: k for k, v in al_map.items()}
+        al_var = ctk.StringVar(value=al_rev.get(s["auto_lock_minutes"], "5 min"))
+        al_opt = ctk.CTkOptionMenu(
+            r, values=list(al_map.keys()), variable=al_var,
+            width=100, height=28, font=ctk.CTkFont(size=11),
+            fg_color=BG_TERT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_SEC, dropdown_text_color=TEXT_PRI)
+        al_opt.pack(side="right")
+        tip(lbl, "Lock the vault automatically after this period of inactivity. "
+                 "'Never' disables auto-lock.")
+        tip(al_opt, "Choose auto-lock duration")
+
+        # — Max Login Attempts —
+        r2, lbl2 = setting_row(g_sec, "🛡️", "Max Login Attempts", idx=1)
+        att_map = {"3": 3, "5": 5, "10": 10, "15": 15}
+        att_var = ctk.StringVar(value=str(s["max_login_attempts"]))
+        att_opt = ctk.CTkOptionMenu(
+            r2, values=list(att_map.keys()), variable=att_var,
+            width=80, height=28, font=ctk.CTkFont(size=11),
+            fg_color=BG_TERT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_SEC, dropdown_text_color=TEXT_PRI)
+        att_opt.pack(side="right")
+        tip(lbl2, "Maximum wrong password attempts before a temporary lockout.")
+        tip(att_opt, "Choose max attempts")
+
+        # — Lockout Duration —
+        r3, lbl3 = setting_row(g_sec, "⏱️", "Lockout Duration", idx=2)
+        lo_map = {"15 sec": 15, "30 sec": 30, "60 sec": 60,
+                  "2 min": 120, "5 min": 300}
+        lo_rev = {v: k for k, v in lo_map.items()}
+        lo_var = ctk.StringVar(value=lo_rev.get(s["lockout_seconds"], "30 sec"))
+        lo_opt = ctk.CTkOptionMenu(
+            r3, values=list(lo_map.keys()), variable=lo_var,
+            width=100, height=28, font=ctk.CTkFont(size=11),
+            fg_color=BG_TERT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_SEC, dropdown_text_color=TEXT_PRI)
+        lo_opt.pack(side="right")
+        tip(lbl3, "How long the vault stays locked after too many failed attempts.")
+        tip(lo_opt, "Choose lockout duration")
+
+        # — Clear Clipboard —
+        r4, lbl4 = setting_row(g_sec, "📋", "Clear Clipboard", idx=3)
+        cl_map = {"Off": 0, "10 sec": 10, "15 sec": 15, "30 sec": 30, "60 sec": 60}
+        cl_rev = {v: k for k, v in cl_map.items()}
+        cl_var = ctk.StringVar(value=cl_rev.get(s["clipboard_clear_seconds"], "Off"))
+        cl_opt = ctk.CTkOptionMenu(
+            r4, values=list(cl_map.keys()), variable=cl_var,
+            width=100, height=28, font=ctk.CTkFont(size=11),
+            fg_color=BG_TERT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_SEC, dropdown_text_color=TEXT_PRI)
+        cl_opt.pack(side="right")
+        tip(lbl4, "Automatically clear copied passwords from clipboard after this time.")
+        tip(cl_opt, "Choose clipboard clear delay")
+
+        # ════════════════ PASSWORD GENERATOR ════════════════
+        g_gen = ios_group(scroll, "Password Generator Defaults")
+
+        # — Default Length —
+        r5, lbl5 = setting_row(g_gen, "📏", "Default Length", idx=0)
+        gl_var = ctk.IntVar(value=s.get("gen_length", 16))
+        gl_lbl = ctk.CTkLabel(r5, text=str(gl_var.get()),
+                                font=ctk.CTkFont(size=11, weight="bold"),
+                                text_color=TEXT_PRI, width=28)
+        gl_lbl.pack(side="right")
+
+        def on_gl(v):
+            gl_var.set(int(float(v)))
+            gl_lbl.configure(text=str(int(float(v))))
+
+        gl_slider = ctk.CTkSlider(
+            r5, from_=6, to=40, number_of_steps=34, command=on_gl,
+            width=140, fg_color=BG_TERT, progress_color=ACCENT,
+            button_color=ACCENT, button_hover_color=ACCENT_HOVER)
+        gl_slider.set(gl_var.get())
+        gl_slider.pack(side="right", padx=(0, 8))
+        tip(lbl5, "Default password length when opening the generator.")
+        tip(gl_slider, "Drag to set default password length (6–40)")
+
+        # — Character types —
+        r6, lbl6 = setting_row(g_gen, "🔤", "Uppercase (ABC)", idx=1)
+        gen_upper = ctk.CTkSwitch(r6, text="", width=46,
+                                    fg_color=BG_TERT, progress_color=GREEN,
+                                    button_color=TEXT_PRI)
+        gen_upper.pack(side="right")
+        if s.get("gen_upper", True):
+            gen_upper.select()
+        tip(lbl6, "Include uppercase letters (A-Z) in generated passwords.")
+
+        r7, lbl7 = setting_row(g_gen, "🔡", "Lowercase (abc)", idx=2)
+        gen_lower = ctk.CTkSwitch(r7, text="", width=46,
+                                    fg_color=BG_TERT, progress_color=GREEN,
+                                    button_color=TEXT_PRI)
+        gen_lower.pack(side="right")
+        if s.get("gen_lower", True):
+            gen_lower.select()
+        tip(lbl7, "Include lowercase letters (a-z) in generated passwords.")
+
+        r8, lbl8 = setting_row(g_gen, "🔢", "Digits (0-9)", idx=3)
+        gen_digits = ctk.CTkSwitch(r8, text="", width=46,
+                                     fg_color=BG_TERT, progress_color=GREEN,
+                                     button_color=TEXT_PRI)
+        gen_digits.pack(side="right")
+        if s.get("gen_digits", True):
+            gen_digits.select()
+        tip(lbl8, "Include digits (0-9) in generated passwords.")
+
+        r9, lbl9 = setting_row(g_gen, "🔣", "Symbols (#$%&)", idx=4)
+        gen_symbols = ctk.CTkSwitch(r9, text="", width=46,
+                                      fg_color=BG_TERT, progress_color=GREEN,
+                                      button_color=TEXT_PRI)
+        gen_symbols.pack(side="right")
+        if s.get("gen_symbols", True):
+            gen_symbols.select()
+        tip(lbl9, "Include special symbols (!@#$%&) in generated passwords.")
+
+        # ════════════════ APPEARANCE ════════════════
+        g_app = ios_group(scroll, "Appearance")
+
+        # — Default Card Color —
+        r10, lbl10 = setting_row(g_app, "🎨", "Default Card Color", idx=0)
+        tip(lbl10, "Default color for new password entries.")
+
+        def_color_var = ctk.StringVar(value=s.get("default_card_color", "default"))
+        color_btns = {}
+        color_row = ctk.CTkFrame(g_app, fg_color="transparent")
+        color_row.pack(fill="x", padx=12, pady=(0, 6))
+
+        for ckey, info in CARD_COLORS.items():
+            btn_color = info["strip"] if info["strip"] else BG_TERT
+            is_sel = def_color_var.get() == ckey
+            b = ctk.CTkButton(
+                color_row, text="✓" if is_sel else "",
+                width=28, height=28, fg_color=btn_color,
+                hover_color=btn_color, corner_radius=14,
+                font=ctk.CTkFont(size=12, weight="bold"), text_color="white",
+                command=lambda k=ckey: _sel_def_color(k))
+            b.pack(side="left", padx=3)
+            color_btns[ckey] = b
+            tip(b, f"{info['label']} — set as default card color")
+
+        def _sel_def_color(k):
+            def_color_var.set(k)
+            for ck, cb in color_btns.items():
+                cb.configure(text="✓" if ck == k else "")
+
+        # ════════════════ BEHAVIOR ════════════════
+        g_beh = ios_group(scroll, "Behavior")
+
+        r11, lbl11 = setting_row(g_beh, "🚀", "Start Minimized", idx=0)
+        start_min = ctk.CTkSwitch(r11, text="", width=46,
+                                    fg_color=BG_TERT, progress_color=GREEN,
+                                    button_color=TEXT_PRI)
+        start_min.pack(side="right")
+        if s.get("start_minimized", False):
+            start_min.select()
+        tip(lbl11, "Start the app minimized to the floating widget instead of "
+                   "showing the full window.")
+
+        # ════════════════ SAVE BUTTON ════════════════
+        def apply_settings():
+            self.settings["auto_lock_minutes"] = al_map.get(al_var.get(), 5)
+            self.settings["max_login_attempts"] = int(att_var.get())
+            self.settings["lockout_seconds"] = lo_map.get(lo_var.get(), 30)
+            self.settings["clipboard_clear_seconds"] = cl_map.get(cl_var.get(), 0)
+            self.settings["gen_length"] = gl_var.get()
+            self.settings["gen_upper"] = bool(gen_upper.get())
+            self.settings["gen_lower"] = bool(gen_lower.get())
+            self.settings["gen_digits"] = bool(gen_digits.get())
+            self.settings["gen_symbols"] = bool(gen_symbols.get())
+            self.settings["default_card_color"] = def_color_var.get()
+            self.settings["start_minimized"] = bool(start_min.get())
+            save_settings(self.settings)
+            # Re-arm the idle timer with new value
+            self._reset_idle()
+            dlg.destroy()
+
+        bottom = ctk.CTkFrame(dlg, fg_color="transparent")
+        bottom.pack(fill="x", padx=14, pady=(0, 12))
+
+        save_btn = ctk.CTkButton(
+            bottom, text="💾  Save Settings", height=40,
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=10,
+            command=apply_settings)
+        save_btn.pack(fill="x")
+        tip(save_btn, "Save all settings and close")
 
     # ─── Change Master Password ──────────────────────────────
     def show_change_password_dialog(self):
@@ -1219,6 +1507,20 @@ class PasswordVault:
         orig_fg = btn.cget("fg_color")
         btn.configure(text="✅ Done!", fg_color=GREEN)
         self.root.after(1000, lambda: self._safe_cfg(btn, orig, orig_fg))
+        # Auto-clear clipboard
+        clear_sec = self.settings.get("clipboard_clear_seconds", 0)
+        if clear_sec > 0:
+            if self._clipboard_timer:
+                self.root.after_cancel(self._clipboard_timer)
+            self._clipboard_timer = self.root.after(
+                clear_sec * 1000, self._clear_clipboard)
+
+    def _clear_clipboard(self):
+        try:
+            pyperclip.copy("")
+        except Exception:
+            pass
+        self._clipboard_timer = None
 
     @staticmethod
     def _safe_cfg(btn, t, fg):
@@ -1247,7 +1549,13 @@ class PasswordVault:
         frm = ctk.CTkFrame(dlg, fg_color="transparent")
         frm.pack(fill="both", expand=True, padx=18, pady=(0, 10))
 
-        gen_var = ctk.StringVar(value=generate_password())
+        _gl = self.settings.get("gen_length", 16)
+        gen_var = ctk.StringVar(value=generate_password(
+            _gl,
+            self.settings.get("gen_upper", True),
+            self.settings.get("gen_lower", True),
+            self.settings.get("gen_digits", True),
+            self.settings.get("gen_symbols", True)))
         gen_entry = ctk.CTkEntry(
             frm, height=38,
             font=ctk.CTkFont(family="Consolas", size=13, weight="bold"),
@@ -1266,17 +1574,17 @@ class PasswordVault:
                             text_color=GREEN)
         sl.pack(side="left", padx=(6, 0))
 
-        lv = ctk.IntVar(value=16)
-        uv = ctk.BooleanVar(value=True)
-        lov = ctk.BooleanVar(value=True)
-        dv = ctk.BooleanVar(value=True)
-        sv = ctk.BooleanVar(value=True)
+        lv = ctk.IntVar(value=self.settings.get("gen_length", 16))
+        uv = ctk.BooleanVar(value=self.settings.get("gen_upper", True))
+        lov = ctk.BooleanVar(value=self.settings.get("gen_lower", True))
+        dv = ctk.BooleanVar(value=self.settings.get("gen_digits", True))
+        sv = ctk.BooleanVar(value=self.settings.get("gen_symbols", True))
 
         lf = ctk.CTkFrame(frm, fg_color="transparent")
         lf.pack(fill="x", pady=(0, 5))
         ctk.CTkLabel(lf, text="Length:", font=ctk.CTkFont(size=11),
                       text_color=TEXT_SEC).pack(side="left")
-        ll = ctk.CTkLabel(lf, text="16",
+        ll = ctk.CTkLabel(lf, text=str(_gl),
                             font=ctk.CTkFont(size=11, weight="bold"),
                             text_color=TEXT_PRI, width=28)
         ll.pack(side="right")
@@ -1299,7 +1607,7 @@ class PasswordVault:
             lf, from_=6, to=40, number_of_steps=34, command=on_len,
             fg_color=BG_TERT, progress_color=ACCENT,
             button_color=ACCENT, button_hover_color=ACCENT_HOVER)
-        slider.set(16)
+        slider.set(_gl)
         slider.pack(side="left", fill="x", expand=True, padx=(8, 8))
         tip(slider, "Drag to change password length")
 
@@ -1438,8 +1746,9 @@ class PasswordVault:
         g_color = ios_group(frm, "Color", compact=True)
         color_row = ctk.CTkFrame(g_color, fg_color="transparent")
         color_row.pack(fill="x", padx=10, pady=4)
+        _def_color = self.settings.get("default_card_color", "default")
         current_color = ctk.StringVar(
-            value=entry.get("color", "default") if is_edit else "default")
+            value=entry.get("color", "default") if is_edit else _def_color)
 
         color_btns = {}
         for ckey, info in CARD_COLORS.items():
@@ -1653,6 +1962,8 @@ class PasswordVault:
         dlg.geometry(f"{w}x{h}+{cx}+{cy}")
 
     def run(self):
+        if self.settings.get("start_minimized", False):
+            self.root.after(200, self.minimize_to_widget)
         self.root.mainloop()
 
 
