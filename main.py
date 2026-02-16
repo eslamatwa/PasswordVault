@@ -2035,12 +2035,29 @@ class PasswordVault:
             self.floating_widget.withdraw()
 
     def quit_app(self):
+        """Fully terminate the application — kill all windows and the process."""
+        try:
+            if self._clipboard_timer:
+                self.root.after_cancel(self._clipboard_timer)
+            if self._idle_timer:
+                self.root.after_cancel(self._idle_timer)
+        except Exception:
+            pass
         if self.mini_vault:
             try:
                 self.mini_vault.destroy()
             except Exception:
                 pass
-        self.root.destroy()
+        if self.floating_widget:
+            try:
+                self.floating_widget.destroy()
+            except Exception:
+                pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
 
     def _center(self, dlg, w, h):
         dlg.update_idletasks()

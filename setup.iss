@@ -27,6 +27,9 @@ PrivilegesRequiredOverridesAllowed=dialog
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
 UsePreviousTasks=yes
+; ── Force close running app during install/update ──
+CloseApplications=force
+CloseApplicationsFilter=PasswordVault.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
