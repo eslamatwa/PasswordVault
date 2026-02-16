@@ -6,6 +6,8 @@ import customtkinter as ctk
 import tkinter as tk
 import json
 import os
+import sys
+import shutil
 import base64
 import uuid
 import string
@@ -18,9 +20,23 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import pyperclip
 
 # ─── Paths ────────────────────────────────────────────────────
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(APP_DIR, "vault.dat")
-SALT_FILE = os.path.join(APP_DIR, "vault.salt")
+# Use %APPDATA%/PasswordVault for persistent, safe data storage
+_APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
+DATA_DIR = os.path.join(_APPDATA, "PasswordVault")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Migrate old data from exe directory if it exists (one-time)
+_EXE_DIR = os.path.dirname(os.path.abspath(
+    sys.executable if getattr(sys, "frozen", False) else __file__))
+for _fname in ("vault.dat", "vault.salt"):
+    _old = os.path.join(_EXE_DIR, _fname)
+    _new = os.path.join(DATA_DIR, _fname)
+    if os.path.exists(_old) and not os.path.exists(_new):
+        shutil.copy2(_old, _new)
+
+DATA_FILE = os.path.join(DATA_DIR, "vault.dat")
+SALT_FILE = os.path.join(DATA_DIR, "vault.salt")
+APP_DIR = _EXE_DIR  # for icon.ico lookup
 
 # ─── Constants ────────────────────────────────────────────────
 AUTO_LOCK_MINUTES = 5
