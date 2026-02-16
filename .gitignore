@@ -14,7 +14,9 @@ venv.bak/
 # Distribution / packaging
 dist/
 build/
+installer/
 *.egg-info/
+*.spec
 
 # Local data (Do NOT commit these!)
 vault.dat

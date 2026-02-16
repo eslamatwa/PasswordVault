@@ -1110,100 +1110,92 @@ class PasswordVault:
         cc = CARD_COLORS.get(color_key, CARD_COLORS["default"])
 
         card = ctk.CTkFrame(self.entries_panel, fg_color=cc["bg"],
-                              corner_radius=12)
-        card.pack(fill="x", pady=4, padx=8)
+                              corner_radius=10)
+        card.pack(fill="x", pady=2, padx=8)
 
         if cc["strip"]:
-            ctk.CTkFrame(card, width=4, fg_color=cc["strip"],
-                          corner_radius=2).place(x=4, y=8, relheight=0.78)
+            ctk.CTkFrame(card, width=3, fg_color=cc["strip"],
+                          corner_radius=2).place(x=3, y=6, relheight=0.78)
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=(16 if cc["strip"] else 14), pady=10)
+        inner.pack(fill="x", padx=(14 if cc["strip"] else 12), pady=6)
 
         # Row 1: Title + badge + actions
         r1 = ctk.CTkFrame(inner, fg_color="transparent")
-        r1.pack(fill="x", pady=(0, 6))
+        r1.pack(fill="x", pady=(0, 2))
         emoji = cat_emoji(entry.get("category", ""))
         ctk.CTkLabel(r1, text=f"{emoji}  {entry.get('title', '')}",
-                      font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+                      font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                       text_color=TEXT_PRI).pack(side="left")
-        ctk.CTkLabel(r1, text=f"  {entry.get('category', '')}  ",
-                      font=ctk.CTkFont(family="Segoe UI", size=10),
+        ctk.CTkLabel(r1, text=f" {entry.get('category', '')} ",
+                      font=ctk.CTkFont(family="Segoe UI", size=9),
                       text_color=TEXT_SEC, fg_color=BADGE_BG,
-                      corner_radius=6).pack(side="left", padx=(10, 0))
+                      corner_radius=4).pack(side="left", padx=(8, 0))
 
         del_btn = ctk.CTkButton(
-            r1, text="🗑", width=28, height=28, fg_color="transparent",
-                       hover_color=RED_HOVER, corner_radius=6, font=ctk.CTkFont(size=13),
+            r1, text="🗑", width=24, height=24, fg_color="transparent",
+            hover_color=RED_HOVER, corner_radius=5, font=ctk.CTkFont(size=11),
             command=lambda: self.confirm_delete(entry))
-        del_btn.pack(side="right", padx=2)
+        del_btn.pack(side="right", padx=1)
         tip(del_btn, "Delete this entry")
 
         edit_btn = ctk.CTkButton(
-            r1, text="✏", width=28, height=28, fg_color="transparent",
-            hover_color=BG_TERT, corner_radius=6, font=ctk.CTkFont(size=13),
+            r1, text="✏", width=24, height=24, fg_color="transparent",
+            hover_color=BG_TERT, corner_radius=5, font=ctk.CTkFont(size=11),
             command=lambda: self.show_entry_dialog(entry))
-        edit_btn.pack(side="right", padx=2)
+        edit_btn.pack(side="right", padx=1)
         tip(edit_btn, "Edit this entry")
 
-        # Row 2: User
+        # Row 2: User + Pass (compact single row)
         r2 = ctk.CTkFrame(inner, fg_color="transparent")
-        r2.pack(fill="x", pady=2)
-        ctk.CTkLabel(r2, text="👤  User:", font=ctk.CTkFont(size=11),
-                      text_color=TEXT_SEC, width=75, anchor="w").pack(side="left")
-        ctk.CTkLabel(r2, text=entry.get("username", ""),
-                      font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(side="left", padx=(2, 0))
+        r2.pack(fill="x", pady=(0, 1))
+        ctk.CTkLabel(r2, text=f"👤 {entry.get('username', '')}",
+                      font=ctk.CTkFont(family="Segoe UI", size=11),
+                      text_color=TEXT_SEC, anchor="w").pack(side="left")
         cu = ctk.CTkButton(
-            r2, text="📋 Copy", width=70, height=24, font=ctk.CTkFont(size=10),
+            r2, text="📋", width=28, height=22, font=ctk.CTkFont(size=10),
             fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG,
-            corner_radius=6,
-                            command=lambda: self._copy(entry.get("username", ""), cu))
-        cu.pack(side="right")
-        tip(cu, "Copy username to clipboard")
+            corner_radius=5,
+            command=lambda: self._copy(entry.get("username", ""), cu))
+        cu.pack(side="left", padx=(6, 0))
+        tip(cu, "Copy username")
 
-        # Row 3: Pass
-        r3 = ctk.CTkFrame(inner, fg_color="transparent")
-        r3.pack(fill="x", pady=2)
-        ctk.CTkLabel(r3, text="🔒  Pass:", font=ctk.CTkFont(size=11),
-                      text_color=TEXT_SEC, width=75, anchor="w").pack(side="left")
         pwd = entry.get("password", "")
-        plbl = ctk.CTkLabel(r3, text="●" * min(len(pwd), 18),
-                              font=ctk.CTkFont(size=12),
-                              text_color=TEXT_PRI, anchor="w")
-        plbl.pack(side="left", padx=(2, 0))
         cp = ctk.CTkButton(
-            r3, text="📋 Copy", width=70, height=24, font=ctk.CTkFont(size=10),
+            r2, text="🔑 Copy", width=65, height=22, font=ctk.CTkFont(size=10),
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
-            corner_radius=6,
-                            command=lambda: self._copy(pwd, cp))
+            corner_radius=5,
+            command=lambda: self._copy(pwd, cp))
         cp.pack(side="right")
-        tip(cp, "Copy password to clipboard")
+        tip(cp, "Copy password")
+
+        plbl = ctk.CTkLabel(r2, text="●" * min(len(pwd), 12),
+                              font=ctk.CTkFont(size=11),
+                              text_color=TEXT_TERT, anchor="e")
+        plbl.pack(side="right", padx=(0, 4))
 
         def toggle(lbl=plbl, real=pwd):
             if "●" in lbl.cget("text"):
-                lbl.configure(text=real)
+                lbl.configure(text=real[:20])
                 eye.configure(text="🙈")
             else:
-                lbl.configure(text="●" * min(len(real), 18))
+                lbl.configure(text="●" * min(len(real), 12))
                 eye.configure(text="👁")
 
         eye = ctk.CTkButton(
-            r3, text="👁", width=28, height=24, fg_color="transparent",
-            hover_color=BG_TERT, corner_radius=6, font=ctk.CTkFont(size=12),
+            r2, text="👁", width=24, height=22, fg_color="transparent",
+            hover_color=BG_TERT, corner_radius=5, font=ctk.CTkFont(size=10),
             command=toggle)
-        eye.pack(side="right", padx=(0, 4))
+        eye.pack(side="right", padx=(0, 2))
         tip(eye, "Show / hide password")
 
-        # Notes
+        # Notes (compact)
         notes = entry.get("notes", "")
         if notes:
-            ctk.CTkFrame(inner, height=1, fg_color=SEPARATOR).pack(
-                fill="x", pady=(6, 4))
             ctk.CTkLabel(inner, text=notes,
-                          font=ctk.CTkFont(family="Segoe UI", size=11),
+                          font=ctk.CTkFont(family="Segoe UI", size=10),
                           text_color=TEXT_TERT, anchor="w", wraplength=400,
-                          justify="left").pack(fill="x")
+                          justify="left").pack(fill="x", pady=(2, 0))
 
     def _copy(self, text, btn):
         pyperclip.copy(text)

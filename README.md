@@ -44,6 +44,14 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 
 ## 🛠️ Installation
 
+### Option 1: Installer (Recommended)
+1. Download **`PasswordVault_Setup.exe`** from the [Releases](https://github.com/eslamatwa/PasswordVault/releases) page.
+2. Run the installer — it will create:
+   - 🖥️ **Desktop shortcut**
+   - 📂 **Start Menu shortcut**
+3. Launch **Password Vault** from your Desktop or Start Menu.
+
+### Option 2: Run from Source
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/eslamatwa/PasswordVault.git
