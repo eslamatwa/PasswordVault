@@ -2,7 +2,7 @@
 
 A modern, secure, and elegant password manager for Windows — built with **Python** and **CustomTkinter** in Apple Dark Mode style.
 
-**Version:** 2.0 | **Developer:** Eslam Atwa
+**Version:** 3.1 | **Developer:** Eslam Atwa
 
 ---
 
@@ -38,12 +38,33 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 - **Notes** — Add optional notes to any entry.
 - **Edit & Delete** — Full CRUD operations with confirmation dialogs.
 
+### 🖱️ Right-Click Context Menu
+- **Full Context Menu** — Right-click any entry card (in main vault or Mini Vault) for quick actions:
+  - 📋 Copy Username / 🔑 Copy Password
+  - 🌐 Open URL in Browser / Open URL + Copy Username
+  - 🖥️ **SSH Session** — Launch SSH with PuTTY, MobaXterm, or Windows SSH
+  - 🖥️ **RDP Session** — Launch Remote Desktop connection
+  - ✏️ Edit / 📌 Pin / 🗑️ Delete
+
+### 🖥️ SSH & RDP Integration
+- **SSH Session Dialog** — Interactive dialog with:
+  - Host/IP input (auto-filled from entry URL)
+  - Username (auto-filled from entry)
+  - Port selection (auto-detected from URL)
+  - **SSH Client chooser** — Auto-detects installed clients: PuTTY, MobaXterm, Windows OpenSSH
+  - Password auto-copied to clipboard on connect
+- **RDP Session Dialog** — Launch Remote Desktop with:
+  - Host/IP input (auto-filled from entry URL)
+  - Username and port configuration
+  - Password auto-copied to clipboard on connect
+
 ### 🪟 Floating Widget & Mini Vault
 - **Floating Widget** — Minimizes to a small draggable bubble (always on top) for quick access.
 - **Mini Vault** — A compact, always-on-top window to search, copy, and edit passwords without opening the full app.
   - Category filtering
   - Copy username/password
   - Edit entries directly
+  - **Right-click context menu** with SSH/RDP/Copy/Edit actions
 - **Start Minimized** — Option to launch the app directly to the floating widget (configurable in Settings).
 
 ### ⚙️ Settings (Full Page)
@@ -122,7 +143,11 @@ pip install pyinstaller
 
 ### Step 2: Build the Executable
 ```bash
-pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name=PasswordVault --add-data "icon.ico;." main.py
+pyinstaller PasswordVault.spec --noconfirm
+```
+Or manually:
+```bash
+pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name=PasswordVault --add-data "icon.ico;." --hidden-import password_vault --hidden-import password_vault.crypto --hidden-import password_vault.security --hidden-import password_vault.settings --hidden-import password_vault.theme --hidden-import password_vault.export_import --hidden-import password_vault.ui --hidden-import password_vault.ui.widgets --hidden-import password_vault.ui.mini_vault --hidden-import password_vault.ui.floating main.py
 ```
 This creates `dist/PasswordVault.exe` — a single standalone executable.
 
@@ -149,13 +174,40 @@ PasswordVault/
 
 ---
 
+## 🏗️ Project Structure
+
+```
+PasswordVault/
+├── main.py                          # Entry point — UI logic & PasswordVault class
+├── password_vault/                  # Core package (modular architecture)
+│   ├── __init__.py                  # APP_VERSION, APP_AUTHOR, logging setup
+│   ├── crypto.py                    # Encryption, key derivation, save/load data
+│   ├── security.py                  # Strength, age, duplicates, HIBP, score, generator
+│   ├── settings.py                  # Settings persistence (load/save JSON)
+│   ├── theme.py                     # Apple Dark Mode colors & card presets
+│   ├── export_import.py             # CSV & Excel export/import helpers
+│   └── ui/
+│       ├── __init__.py
+│       ├── widgets.py               # Tooltip, iOS-style group/field/combo, search bar
+│       ├── mini_vault.py            # Mini Vault (compact always-on-top viewer)
+│       └── floating.py              # Floating Widget (draggable bubble)
+├── icon.ico                         # Application icon
+├── PasswordVault.spec               # PyInstaller build spec
+├── setup.iss                        # Inno Setup installer script
+├── requirements.txt                 # Python dependencies
+└── README.md
+```
+
+---
+
 ## 📂 Data Storage
 
 | File | Location | Purpose |
 |------|----------|---------|
 | `vault.dat` | `%APPDATA%\PasswordVault\` | Encrypted password database |
-| `vault.salt` | `%APPDATA%\PasswordVault\` | Encryption salt |
+| `vault.salt` | `%APPDATA%\PasswordVault\` | Encryption salt (32-byte) |
 | `settings.json` | `%APPDATA%\PasswordVault\` | User preferences |
+| `vault.log` | `%APPDATA%\PasswordVault\` | Application event log |
 
 > Data is stored in `%APPDATA%` (typically `C:\Users\<you>\AppData\Roaming\PasswordVault\`) to ensure persistence across app updates and proper backup support.
 
@@ -175,11 +227,14 @@ PasswordVault/
 ## 🔒 Security Notes
 
 - All data is stored **locally** in `vault.dat` (AES-256 encrypted).
-- Encryption salt is stored in `vault.salt`.
+- Encryption salt is stored in `vault.salt` (32-byte, backwards-compatible with 16-byte).
 - The encryption key is derived from your **Master Password** using PBKDF2HMAC (SHA-256, 480K iterations).
+- **Constant-time comparison** (`hmac.compare_digest`) is used for master password verification to prevent timing attacks.
+- **Atomic file saves** — data is written to a temp file first, then atomically replaced to prevent corruption on crash.
 - ⚠️ **Do not lose your Master Password!** There is no way to recover your data without it.
 - Passwords are generated using Python's `secrets` module (cryptographically secure).
 - Clipboard can be auto-cleared after a configurable timeout.
+- All application events are logged to `vault.log` for diagnostics.
 
 ---
 
