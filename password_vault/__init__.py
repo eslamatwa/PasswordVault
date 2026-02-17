@@ -5,7 +5,7 @@
 import logging
 import os
 
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 APP_AUTHOR = "Eslam Atwa"
 
 # ─── Logging (initialized once at package import) ─────────────

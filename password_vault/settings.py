@@ -35,7 +35,7 @@ DEFAULT_SETTINGS: dict = {
     "default_card_color": "default",
     "max_login_attempts": 5,
     "lockout_seconds": 30,
-    "clipboard_clear_seconds": 0,
+    "clipboard_clear_seconds": 30,
 }
 
 
@@ -54,7 +54,17 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict) -> None:
-    """Persist user settings to disk."""
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
+    """Persist user settings to disk (atomic write)."""
+    tmp = SETTINGS_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, SETTINGS_FILE)
+    except (OSError, TypeError, ValueError) as exc:
+        log.error("Failed to save settings: %s", exc)
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 

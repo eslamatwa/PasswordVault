@@ -199,13 +199,7 @@ class MiniVault(ctk.CTkToplevel):
 
     def _mini_copy_text(self, text):
         """Copy text to clipboard with auto-clear support."""
-        pyperclip.copy(text)
-        clear_sec = self.app.settings.get("clipboard_clear_seconds", 0)
-        if clear_sec > 0:
-            if self.app._clipboard_timer:
-                self.app.root.after_cancel(self.app._clipboard_timer)
-            self.app._clipboard_timer = self.app.root.after(
-                clear_sec * 1000, self.app._clear_clipboard)
+        self.app._copy_to_clipboard(text)
 
     def _mini_card(self, entry):
         color_key = entry.get("color", "default")
@@ -309,17 +303,11 @@ class MiniVault(ctk.CTkToplevel):
         self.app.show_entry_dialog(entry)
 
     def _mini_copy(self, text, btn):
-        pyperclip.copy(text)
+        self.app._copy_to_clipboard(text)
         orig = btn.cget("text")
         orig_fg = btn.cget("fg_color")
         btn.configure(text="✅ Copied!", fg_color=GREEN)
         self.after(1000, lambda: self._safe_cfg(btn, orig, orig_fg))
-        clear_sec = self.app.settings.get("clipboard_clear_seconds", 0)
-        if clear_sec > 0:
-            if self.app._clipboard_timer:
-                self.app.root.after_cancel(self.app._clipboard_timer)
-            self.app._clipboard_timer = self.app.root.after(
-                clear_sec * 1000, self.app._clear_clipboard)
 
     @staticmethod
     def _safe_cfg(btn, t, fg):

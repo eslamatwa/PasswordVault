@@ -10,12 +10,14 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog as tkfiledialog
 import csv
+import ctypes
 import datetime
 import hashlib
 import hmac
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -123,8 +125,36 @@ class PasswordVault:
             self._idle_timer = self.root.after(
                 mins * 60 * 1000, self._auto_lock)
 
+    @staticmethod
+    def _secure_wipe(obj):
+        """Best-effort wipe of sensitive data from memory."""
+        if isinstance(obj, (bytes, bytearray)):
+            try:
+                ctypes.memset(ctypes.addressof(
+                    ctypes.c_char.from_buffer(bytearray(obj))), 0, len(obj))
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                if isinstance(v, str):
+                    # Can't truly zero Python str, but replace reference
+                    pass
+                elif isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, dict):
+                            for k2 in ("password", "username"):
+                                if k2 in item:
+                                    item[k2] = "\x00" * len(item.get(k2, ""))
+                    v.clear()
+            obj.clear()
+
     def _auto_lock(self):
         log.info("Vault auto-locked due to inactivity.")
+        # Best-effort wipe sensitive data before releasing references
+        if self.key:
+            self._secure_wipe(self.key)
+        if self.data:
+            self._secure_wipe(self.data)
         self.key = None
         self.data = None
         self._idle_timer = None
@@ -474,16 +504,7 @@ class PasswordVault:
 
     # ─── About Dialog ────────────────────────────────────────
     def show_about_dialog(self):
-        self._reset_idle()
-        DW, DH = 380, 440
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("About Password Vault")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("About Password Vault", 380, 440)
 
         circle = ctk.CTkFrame(dlg, width=80, height=80,
                                 corner_radius=40, fg_color=ACCENT)
@@ -558,16 +579,7 @@ class PasswordVault:
 
     # ─── Settings Dialog ─────────────────────────────────────
     def show_settings_dialog(self):
-        self._reset_idle()
-        DW, DH = 480, 620
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Settings")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Settings", 480, 620)
 
         ctk.CTkLabel(dlg, text="⚙️  Settings",
                       font=ctk.CTkFont(family="Segoe UI", size=17,
@@ -788,16 +800,7 @@ class PasswordVault:
 
     # ─── Change Master Password ──────────────────────────────
     def show_change_password_dialog(self):
-        self._reset_idle()
-        DW, DH = 400, 380
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Change Master Password")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Change Master Password", 400, 380)
 
         ctk.CTkLabel(dlg, text="🔑", font=ctk.CTkFont(size=32)).pack(
             pady=(16, 2))
@@ -920,17 +923,9 @@ class PasswordVault:
 
     # ─── Delete Category ─────────────────────────────────────
     def confirm_delete_category(self, cat_name):
-        self._reset_idle()
         n = sum(1 for e in self.data["entries"]
                 if e.get("category") == cat_name)
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Delete Category")
-        dlg.geometry("380x190")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, 380, 190)
+        dlg = self._make_dialog("Delete Category", 380, 190)
 
         ctk.CTkLabel(dlg, text="⚠️  Delete Category?",
                       font=ctk.CTkFont(family="Segoe UI", size=17,
@@ -1165,23 +1160,19 @@ class PasswordVault:
         self.refresh_entries()
 
     def _save_and_refresh(self):
-        """Save data and refresh all views (entries + mini vault)."""
+        """Save data and refresh all views (entries + categories + mini vault)."""
         save_data(self.data, self.key)
+        self.refresh_categories()
         self.refresh_entries()
+        if (self.mini_vault
+                and self.mini_vault.winfo_exists()):
+            try:
+                self.mini_vault._refresh()
+            except tk.TclError:
+                pass
 
     def _copy(self, text, btn):
-        pyperclip.copy(text)
-        orig = btn.cget("text")
-        orig_fg = btn.cget("fg_color")
-        btn.configure(text="✅ Done!", fg_color=GREEN)
-        self.root.after(1000,
-                         lambda: self._safe_cfg(btn, orig, orig_fg))
-        clear_sec = self.settings.get("clipboard_clear_seconds", 0)
-        if clear_sec > 0:
-            if self._clipboard_timer:
-                self.root.after_cancel(self._clipboard_timer)
-            self._clipboard_timer = self.root.after(
-                clear_sec * 1000, self._clear_clipboard)
+        self._copy_to_clipboard(text, btn)
 
     def _clear_clipboard(self):
         try:
@@ -1271,13 +1262,7 @@ class PasswordVault:
 
     def _ctx_copy(self, text, label=""):
         """Copy text to clipboard with optional notification."""
-        pyperclip.copy(text)
-        clear_sec = self.settings.get("clipboard_clear_seconds", 0)
-        if clear_sec > 0:
-            if self._clipboard_timer:
-                self.root.after_cancel(self._clipboard_timer)
-            self._clipboard_timer = self.root.after(
-                clear_sec * 1000, self._clear_clipboard)
+        self._copy_to_clipboard(text)
 
     @staticmethod
     def _extract_host(url, entry):
@@ -1311,19 +1296,10 @@ class PasswordVault:
 
     def _open_url_with_creds(self, url, username, password):
         """Open URL in browser and copy username to clipboard."""
-        pyperclip.copy(username)
+        self._copy_to_clipboard(username)
         webbrowser.open(url)
         # After 3 seconds, auto-copy password to clipboard
-        def copy_pass():
-            pyperclip.copy(password)
-        self.root.after(3000, copy_pass)
-        # Schedule clipboard clear if enabled
-        clear_sec = self.settings.get("clipboard_clear_seconds", 0)
-        if clear_sec > 0:
-            if self._clipboard_timer:
-                self.root.after_cancel(self._clipboard_timer)
-            self._clipboard_timer = self.root.after(
-                (clear_sec + 3) * 1000, self._clear_clipboard)
+        self.root.after(3000, lambda: self._copy_to_clipboard(password))
 
     # ─── Detect available SSH/RDP clients ────────────────────
     @staticmethod
@@ -1368,25 +1344,16 @@ class PasswordVault:
             clients.append(("Windows SSH", win_ssh))
         else:
             # ssh.exe might be on PATH
-            import shutil
-            if shutil.which("ssh"):
-                clients.append(("Windows SSH", "ssh"))
+            found = shutil.which("ssh")
+            if found:
+                clients.append(("Windows SSH", found))
 
         return clients
 
     # ─── SSH Connection Dialog ─────────────────────────────
     def _show_ssh_dialog(self, entry):
         """Show a dialog to configure and start an SSH session."""
-        self._reset_idle()
-        DW, DH = 420, 480
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("SSH Session")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("SSH Session", 420, 480)
 
         ctk.CTkLabel(
             dlg, text="🖥️  SSH Session",
@@ -1499,20 +1466,11 @@ class PasswordVault:
                 return
 
             # Copy password to clipboard
-            password = entry.get("password", "")
-            pyperclip.copy(password)
+            self._copy_to_clipboard(entry.get("password", ""))
 
             dlg.destroy()
             self._launch_ssh(client_path, selected, host, user,
                              port, entry.get("title", ""))
-
-            # Schedule clipboard clear
-            clear_sec = self.settings.get("clipboard_clear_seconds", 0)
-            if clear_sec > 0:
-                if self._clipboard_timer:
-                    self.root.after_cancel(self._clipboard_timer)
-                self._clipboard_timer = self.root.after(
-                    clear_sec * 1000, self._clear_clipboard)
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 12))
@@ -1553,8 +1511,18 @@ class PasswordVault:
                 pass
         return default
 
+    @staticmethod
+    def _sanitize_shell_arg(value: str) -> str:
+        """Remove dangerous characters from a value used in shell args."""
+        # Only allow alphanumeric, dots, hyphens, underscores, @, colons
+        return re.sub(r'[^a-zA-Z0-9.\-_@:/ ]', '', value)
+
     def _launch_ssh(self, client_path, client_name, host, user, port, title):
         """Launch SSH session using the selected client."""
+        # Sanitize all user-supplied values to prevent command injection
+        host = self._sanitize_shell_arg(host)
+        user = self._sanitize_shell_arg(user)
+        port = int(port)
         try:
             if client_name == "PuTTY":
                 cmd = [client_path, "-ssh"]
@@ -1566,7 +1534,6 @@ class PasswordVault:
                 subprocess.Popen(cmd)
 
             elif client_name == "MobaXterm":
-                # MobaXterm command-line: -newtab "ssh user@host:port"
                 ssh_uri = f"{user}@{host}" if user else host
                 if port != 22:
                     ssh_uri += f":{port}"
@@ -1574,19 +1541,19 @@ class PasswordVault:
                                   f"ssh {ssh_uri}"])
 
             elif client_name == "Windows SSH":
-                ssh_cmd = "ssh"
-                if user:
-                    ssh_cmd += f" {user}@{host}"
-                else:
-                    ssh_cmd += f" {host}"
+                # Build argument list — no shell interpretation
+                cmd = [client_path]
+                target = f"{user}@{host}" if user else host
+                cmd.append(target)
                 if port != 22:
-                    ssh_cmd += f" -p {port}"
-                # Open in a new cmd window
+                    cmd += ["-p", str(port)]
+                # Open in a new visible console window
                 subprocess.Popen(
                     ["cmd", "/c", "start",
-                     f"SSH - {title} ({host})",
-                     "cmd", "/k", ssh_cmd],
-                    creationflags=subprocess.CREATE_NO_WINDOW
+                     self._sanitize_shell_arg(
+                         f"SSH - {title} ({host})"),
+                     "cmd", "/k"] + cmd,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
                 )
         except OSError as exc:
             log.warning("Failed to launch SSH client %s: %s",
@@ -1595,16 +1562,7 @@ class PasswordVault:
     # ─── RDP Connection Dialog ─────────────────────────────
     def _show_rdp_dialog(self, entry):
         """Show a dialog to configure and start an RDP session."""
-        self._reset_idle()
-        DW, DH = 420, 400
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("RDP Session")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("RDP Session", 420, 400)
 
         ctk.CTkLabel(
             dlg, text="🖥️  Remote Desktop (RDP)",
@@ -1683,30 +1641,17 @@ class PasswordVault:
                 return
 
             # Copy password to clipboard
-            password = entry.get("password", "")
-            pyperclip.copy(password)
+            self._copy_to_clipboard(entry.get("password", ""))
 
             dlg.destroy()
 
-            # Launch RDP
+            # Launch RDP — sanitize to prevent injection
+            host = self._sanitize_shell_arg(host)
             try:
                 rdp_target = f"{host}:{port}" if port != 3389 else host
                 subprocess.Popen(["mstsc", f"/v:{rdp_target}"])
-            except OSError:
-                try:
-                    subprocess.Popen(
-                        ["cmd", "/c", f"mstsc /v:{host}:{port}"],
-                        creationflags=subprocess.CREATE_NO_WINDOW)
-                except OSError as exc:
-                    log.warning("Failed to launch RDP: %s", exc)
-
-            # Schedule clipboard clear
-            clear_sec = self.settings.get("clipboard_clear_seconds", 0)
-            if clear_sec > 0:
-                if self._clipboard_timer:
-                    self.root.after_cancel(self._clipboard_timer)
-                self._clipboard_timer = self.root.after(
-                    clear_sec * 1000, self._clear_clipboard)
+            except OSError as exc:
+                log.warning("Failed to launch RDP: %s", exc)
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 12))
@@ -1728,16 +1673,7 @@ class PasswordVault:
 
     # ─── Password Generator Dialog ───────────────────────────
     def _show_generator(self, target_entry):
-        self._reset_idle()
-        DW, DH = 380, 330
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Password Generator")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Password Generator", 380, 330)
 
         ctk.CTkLabel(
             dlg, text="🎲  Password Generator",
@@ -1852,17 +1788,9 @@ class PasswordVault:
 
     # ─── Add / Edit Entry Dialog ─────────────────────────────
     def show_entry_dialog(self, entry=None):
-        self._reset_idle()
         is_edit = entry is not None
-        DW, DH = 420, 540
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Edit Password" if is_edit else "New Password")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog(
+            "Edit Password" if is_edit else "New Password", 420, 540)
 
         ctk.CTkLabel(
             dlg,
@@ -1954,26 +1882,41 @@ class PasswordVault:
                                 text_color=ORANGE, height=12)
         dup_lbl.pack(fill="x", padx=26, pady=(0, 2))
 
+        _dup_timer = [None]          # debounce handle
+        # Pre-build hash set for O(1) duplicate lookups
+        _pw_hash_map: dict[str, str] = {}
+        _own_id = entry.get("id") if is_edit else None
+        for oe in self.data["entries"]:
+            if oe.get("id") == _own_id:
+                continue
+            op = oe.get("password", "")
+            if op:
+                _pw_hash_map[hashlib.sha256(
+                    op.encode()).hexdigest()] = oe.get("title", "?")
+
+        def _check_dup():
+            """Duplicate check (runs after debounce delay)."""
+            pw = pass_e.get()
+            if pw:
+                h = hashlib.sha256(pw.encode()).hexdigest()
+                dupe_title = _pw_hash_map.get(h)
+                if dupe_title:
+                    dup_lbl.configure(
+                        text=f"⚠️ Same password used in "
+                             f"'{dupe_title}'")
+                    return
+            dup_lbl.configure(text="")
+
         def upd_str(e=None):
             pw = pass_e.get()
             s, l, c = password_strength(pw)
             str_bar.set(s / 4)
             str_bar.configure(progress_color=c)
             str_lbl.configure(text=l, text_color=c)
-            # Check duplicates live
-            if pw:
-                h = hashlib.sha256(pw.encode()).hexdigest()
-                eid = entry.get("id") if is_edit else None
-                for oe in self.data["entries"]:
-                    if oe.get("id") == eid:
-                        continue
-                    if (hashlib.sha256(oe.get("password", "").encode())
-                            .hexdigest() == h):
-                        dup_lbl.configure(
-                            text=f"⚠️ Same password used in "
-                                 f"'{oe.get('title', '?')}'")
-                        return
-            dup_lbl.configure(text="")
+            # Debounced duplicate check (300ms)
+            if _dup_timer[0]:
+                dlg.after_cancel(_dup_timer[0])
+            _dup_timer[0] = dlg.after(300, _check_dup)
 
         pass_e.bind("<KeyRelease>", upd_str)
         if is_edit:
@@ -2067,15 +2010,7 @@ class PasswordVault:
 
     # ─── Delete Confirm (→ Recycle Bin) ──────────────────────
     def confirm_delete(self, entry):
-        self._reset_idle()
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Delete")
-        dlg.geometry("360x175")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, 360, 175)
+        dlg = self._make_dialog("Delete", 360, 175)
 
         ctk.CTkLabel(dlg, text="⚠️  Move to Recycle Bin?",
                       font=ctk.CTkFont(family="Segoe UI", size=17,
@@ -2123,15 +2058,7 @@ class PasswordVault:
 
     # ─── Add Category ────────────────────────────────────────
     def show_add_cat_dialog(self):
-        self._reset_idle()
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("New Category")
-        dlg.geometry("350x185")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, 350, 185)
+        dlg = self._make_dialog("New Category", 350, 185)
 
         ctk.CTkLabel(dlg, text="📁  New Category",
                       font=ctk.CTkFont(family="Segoe UI", size=15,
@@ -2169,16 +2096,7 @@ class PasswordVault:
 
     # ─── Export Dialog ───────────────────────────────────────
     def show_export_dialog(self):
-        self._reset_idle()
-        DW, DH = 420, 280
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Export Data")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Export Data", 420, 280)
 
         ctk.CTkLabel(dlg, text="📤  Export Data",
                       font=ctk.CTkFont(family="Segoe UI", size=16,
@@ -2253,16 +2171,7 @@ class PasswordVault:
 
     # ─── Import Dialog ───────────────────────────────────────
     def show_import_dialog(self):
-        self._reset_idle()
-        DW, DH = 420, 340
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Import Data")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Import Data", 420, 340)
 
         ctk.CTkLabel(dlg, text="📥  Import Data",
                       font=ctk.CTkFont(family="Segoe UI", size=16,
@@ -2374,16 +2283,7 @@ class PasswordVault:
 
     # ─── Recycle Bin Dialog ──────────────────────────────────
     def show_trash_dialog(self):
-        self._reset_idle()
-        DW, DH = 460, 480
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Recycle Bin")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Recycle Bin", 460, 480)
 
         trash = self.data.get("trash", [])
         ctk.CTkLabel(
@@ -2548,16 +2448,7 @@ class PasswordVault:
 
     # ─── Security Dashboard ──────────────────────────────────
     def show_security_dashboard(self):
-        self._reset_idle()
-        DW, DH = 480, 560
-        dlg = ctk.CTkToplevel(self.root)
-        dlg.title("Security Dashboard")
-        dlg.geometry(f"{DW}x{DH}")
-        dlg.resizable(False, False)
-        dlg.configure(fg_color=BG)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        self._center(dlg, DW, DH)
+        dlg = self._make_dialog("Security Dashboard", 480, 560)
 
         entries = self.data.get("entries", [])
         score, stats = calculate_security_score(entries)
@@ -2799,6 +2690,38 @@ class PasswordVault:
         cy = (self.root.winfo_y()
               + (self.root.winfo_height() // 2) - (h // 2))
         dlg.geometry(f"{w}x{h}+{cx}+{cy}")
+
+    def _make_dialog(self, title: str, w: int, h: int) -> ctk.CTkToplevel:
+        """Create a standard centered modal dialog."""
+        self._reset_idle()
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title(title)
+        dlg.geometry(f"{w}x{h}")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color=BG)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        self._center(dlg, w, h)
+        return dlg
+
+    def _copy_to_clipboard(self, text: str, btn=None) -> None:
+        """Copy *text* to clipboard with auto-clear scheduling.
+
+        If *btn* is provided, flash a '✅ Done!' confirmation on it.
+        """
+        pyperclip.copy(text)
+        if btn:
+            orig = btn.cget("text")
+            orig_fg = btn.cget("fg_color")
+            btn.configure(text="✅ Done!", fg_color=GREEN)
+            self.root.after(
+                1000, lambda: self._safe_cfg(btn, orig, orig_fg))
+        clear_sec = self.settings.get("clipboard_clear_seconds", 30)
+        if clear_sec > 0:
+            if self._clipboard_timer:
+                self.root.after_cancel(self._clipboard_timer)
+            self._clipboard_timer = self.root.after(
+                clear_sec * 1000, self._clear_clipboard)
 
     def run(self):
         if (self.settings.get("start_minimized", False)

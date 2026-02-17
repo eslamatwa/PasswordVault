@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import sys
 import uuid
 
@@ -37,6 +38,24 @@ SALT_FILE = os.path.join(DATA_DIR, "vault.salt")
 APP_DIR = _EXE_DIR
 
 
+def _restrict_file(path: str) -> None:
+    """Set restrictive permissions on *path* (owner read/write only)."""
+    try:
+        if sys.platform == "win32":
+            # On Windows: remove inherited ACLs, keep owner only
+            import subprocess as _sp
+            _sp.run(
+                ["icacls", path, "/inheritance:r",
+                 "/grant:r", f"{os.environ.get('USERNAME', '')}:F"],
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+                check=False, capture_output=True,
+            )
+        else:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    except OSError:
+        pass
+
+
 # ─── Salt ─────────────────────────────────────────────────────
 def get_or_create_salt() -> bytes:
     """Load existing salt or create a new 32-byte salt.
@@ -47,6 +66,7 @@ def get_or_create_salt() -> bytes:
     salt = os.urandom(32)
     with open(SALT_FILE, "wb") as f:
         f.write(salt)
+    _restrict_file(SALT_FILE)
     log.info("New salt generated (%d bytes).", len(salt))
     return salt
 
@@ -79,6 +99,7 @@ def save_data(data: dict, key: bytes) -> None:
         with open(tmp, "wb") as f:
             f.write(encrypted)
         os.replace(tmp, DATA_FILE)
+        _restrict_file(DATA_FILE)
         log.info("Vault data saved successfully.")
     except (OSError, ValueError, TypeError) as exc:
         log.error("Failed to save vault data: %s", exc, exc_info=True)
