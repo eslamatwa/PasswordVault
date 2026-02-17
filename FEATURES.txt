@@ -1,0 +1,128 @@
+================================================================
+       Password Vault v3.2 — Feature List
+       Developer: Eslam Atwa
+================================================================
+
+
+SECURITY
+--------
+  * AES-256 Encryption (Fernet) — all passwords encrypted locally
+  * PBKDF2HMAC Key Derivation — 480,000 iterations of SHA-256
+  * Brute-Force Protection — configurable max attempts (3-15) + lockout (15s-5min)
+  * Auto-Lock — vault locks after inactivity (1-30 min or Never)
+  * Auto-Clear Clipboard — clears copied passwords after 10-60 seconds (default 30s)
+  * Atomic File Saves — prevents data corruption on crash
+  * Secure Memory Wipe — sensitive data zeroed out on lock
+  * Restrictive File Permissions — vault files are owner-only access
+  * Master Password Validation — minimum 8 chars, uppercase, lowercase, digits
+  * Constant-Time Comparison — prevents timing attacks on master password
+  * Input Sanitization — SSH/RDP inputs sanitized to prevent command injection
+
+
+USER INTERFACE
+--------------
+  * Apple Dark Mode Style — sleek, modern UI with iOS-inspired design
+  * Card Color Customization — 9 color presets (Blue, Green, Red, Orange, Purple, Teal, Yellow, Pink)
+  * Default Card Color — set a default in Settings for all new entries
+  * Password Strength Meter — real-time visual indicator (Very Weak -> Very Strong)
+  * Tooltips — hover descriptions on all buttons and features
+  * Category Emoji Icons — automatic emoji per category (Social, Work, Banking, etc.)
+  * Show/Hide Password — toggle visibility on login and in edit dialog
+
+
+PASSWORD MANAGEMENT
+-------------------
+  * Password Generator — cryptographically secure, customizable:
+      - Length: 6-40 characters
+      - Toggle: uppercase, lowercase, digits, special characters
+      - Real-time strength preview
+      - Defaults configurable from Settings
+  * Categories — organize entries into custom groups (General, Social, Work, Banking, Gaming...)
+  * Search & Filter — instant search with category filter dropdown
+  * One-Click Copy — copy username or password to clipboard instantly
+  * Notes — add optional notes to any entry
+  * Edit & Delete — full CRUD with confirmation dialogs
+  * Duplicate Password Detection — real-time warning if a password is reused
+  * Recycle Bin — deleted entries kept for recovery (configurable days)
+
+
+RIGHT-CLICK CONTEXT MENU
+-------------------------
+  * Available on every entry card (main vault + Mini Vault):
+      - Copy Username / Copy Password
+      - Open URL in Browser
+      - Open URL + Copy Username (auto-copies password after 3s)
+      - Start SSH Session (PuTTY / MobaXterm / Windows SSH)
+      - Start RDP Session (mstsc)
+      - Edit Entry
+      - Pin / Unpin Entry
+      - Delete Entry
+
+
+SSH & RDP INTEGRATION
+---------------------
+  * SSH Session Dialog:
+      - Host/IP input (auto-filled from entry URL)
+      - Username (auto-filled from entry)
+      - Port selection (auto-detected from URL)
+      - SSH Client chooser — auto-detects: PuTTY, MobaXterm, Windows OpenSSH
+      - Password auto-copied to clipboard on connect
+  * RDP Session Dialog:
+      - Host/IP input (auto-filled from entry URL)
+      - Username and port configuration
+      - Password auto-copied to clipboard on connect
+
+
+FLOATING WIDGET & MINI VAULT
+-----------------------------
+  * Floating Widget — minimizes to a small draggable bubble (always on top)
+  * Mini Vault — compact always-on-top window for quick access:
+      - Category filtering
+      - Copy username/password
+      - Edit entries directly
+      - Full right-click context menu (SSH/RDP/Copy/Edit)
+  * Start Minimized — launch directly to floating widget (configurable)
+
+
+SETTINGS
+--------
+  * Full iOS-style settings page with persistent configuration:
+      - Auto-Lock Timer: 1, 2, 5, 10, 15, 30 min or Never
+      - Max Login Attempts: 3, 5, 10, or 15
+      - Lockout Duration: 15 sec, 30 sec, 1 min, 2 min, or 5 min
+      - Clear Clipboard: Off, or 10, 15, 30, 60 sec
+      - Default Password Length: 6-40 characters
+      - Character Types: Uppercase / Lowercase / Digits / Symbols
+      - Default Card Color
+      - Start Minimized option
+  * All settings saved to %APPDATA%\PasswordVault\settings.json
+
+
+IMPORT & EXPORT
+---------------
+  * Export to CSV or Excel (XLSX)
+  * Import from CSV or Excel
+  * Data stays encrypted at rest — export is plaintext (use with care)
+
+
+INSTALLER
+---------
+  * One-click Windows installer (Inno Setup)
+  * Supports system-wide or per-user installation
+  * Desktop + Start Menu shortcuts
+  * Smart Update — detects existing installation, shows version upgrade info
+  * Passwords & settings safe during update (stored in %APPDATA%)
+
+
+DATA STORAGE
+------------
+  * vault.dat    — encrypted password database (%APPDATA%\PasswordVault\)
+  * vault.salt   — encryption salt, 32-byte (%APPDATA%\PasswordVault\)
+  * settings.json — user preferences (%APPDATA%\PasswordVault\)
+  * vault.log    — application event log (%APPDATA%\PasswordVault\)
+
+
+================================================================
+       https://github.com/eslamatwa/PasswordVault
+================================================================
+

@@ -15,7 +15,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=D:\PasswordVault\PasswordVault\installer
-OutputBaseFilename=PasswordVault_Setup
+OutputBaseFilename=PasswordVault_Setup_v{#MyAppVersion}
 SetupIconFile=D:\PasswordVault\PasswordVault\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
@@ -40,6 +40,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "D:\PasswordVault\PasswordVault\dist\PasswordVault.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\PasswordVault\PasswordVault\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\PasswordVault\PasswordVault\FEATURES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\PasswordVault\PasswordVault\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
