@@ -102,6 +102,16 @@ def check_hibp_batch(
 
     def _worker() -> None:
         total = len(entries)
+        # Reuse a single HTTPS connection for all requests
+        conn: http.client.HTTPSConnection | None = None
+        try:
+            conn = http.client.HTTPSConnection(
+                "api.pwnedpasswords.com", timeout=10)
+            conn._http_vsn = 10
+            conn._http_vsn_str = "HTTP/1.0"
+        except (OSError, http.client.HTTPException):
+            conn = None
+
         for idx, entry in enumerate(entries):
             pw = entry.get("password", "")
             eid = entry.get("id", "")
@@ -113,9 +123,12 @@ def check_hibp_batch(
             try:
                 sha1 = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()
                 prefix, suffix = sha1[:5], sha1[5:]
-                conn = http.client.HTTPSConnection("api.pwnedpasswords.com")
-                conn._http_vsn = 10
-                conn._http_vsn_str = "HTTP/1.0"
+                # Reconnect if previous connection was lost
+                if conn is None:
+                    conn = http.client.HTTPSConnection(
+                        "api.pwnedpasswords.com", timeout=10)
+                    conn._http_vsn = 10
+                    conn._http_vsn_str = "HTTP/1.0"
                 conn.request("GET", f"/range/{prefix}",
                              headers={"User-Agent": f"PasswordVault/{APP_VERSION}"})
                 resp = conn.getresponse()
@@ -130,15 +143,28 @@ def check_hibp_batch(
                 else:
                     resp.read()
                     found = -1
-                conn.close()
                 results[eid] = found
             except (OSError, http.client.HTTPException, ValueError) as exc:
                 log.warning("HIBP check failed for entry %s: %s", eid,
                             exc, exc_info=True)
                 results[eid] = -1
+                # Connection may be broken, reset it
+                try:
+                    if conn:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
             if progress_cb:
                 progress_cb(idx + 1, total)
             time.sleep(0.2)
+
+        # Clean up
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
         done_cb(results)
 
     threading.Thread(target=_worker, daemon=True).start()

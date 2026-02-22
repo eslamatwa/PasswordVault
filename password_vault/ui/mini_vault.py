@@ -61,7 +61,8 @@ class MiniVault(ctk.CTkToplevel):
 
         # Search
         self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._refresh())
+        self._search_debounce_id = None
+        self.search_var.trace_add("write", lambda *_: self._debounced_search())
         search = make_search_bar(
             self, self.search_var,
             lambda: (self.app.data.get("categories", [])
@@ -81,6 +82,12 @@ class MiniVault(ctk.CTkToplevel):
         self._refresh()
 
     # helpers
+    def _debounced_search(self):
+        """Debounce search — only refresh after 250ms of inactivity."""
+        if self._search_debounce_id:
+            self.after_cancel(self._search_debounce_id)
+        self._search_debounce_id = self.after(250, self._refresh)
+
     def _set_cat(self, cat):
         self._mini_cat = cat
         self._cat_label.configure(
@@ -130,13 +137,15 @@ class MiniVault(ctk.CTkToplevel):
             self._mini_card(entry)
 
     def _bind_right_click_recursive(self, widget, callback):
-        """Bind right-click to a widget and ALL its children recursively."""
-        widget.bind("<Button-3>", callback)
-        try:
-            for child in widget.winfo_children():
-                self._bind_right_click_recursive(child, callback)
-        except (tk.TclError, AttributeError):
-            pass
+        """Bind right-click to a widget and ALL its children (iterative)."""
+        stack = [widget]
+        while stack:
+            w = stack.pop()
+            try:
+                w.bind("<Button-3>", callback)
+                stack.extend(w.winfo_children())
+            except (tk.TclError, AttributeError):
+                pass
 
     def _show_mini_context_menu(self, event, entry):
         """Show right-click context menu directly in Mini Vault."""
@@ -294,8 +303,8 @@ class MiniVault(ctk.CTkToplevel):
         edit_btn.pack(side="right")
         tip(edit_btn, "Edit this entry")
 
-        # Apply right-click binding to card + ALL children recursively
-        self.after(50, lambda: self._bind_right_click_recursive(
+        # Apply right-click binding to card + ALL children once idle
+        self.after_idle(lambda: self._bind_right_click_recursive(
             card, _on_right_click))
 
     def _mini_edit(self, entry):
