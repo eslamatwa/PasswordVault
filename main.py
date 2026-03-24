@@ -1,13 +1,16 @@
 """
+
 🔐 Password Vault - Modern password manager for Windows (Apple Dark Style)
 
 This is the main entry point. Utility modules live under ``password_vault/``.
 """
 
+
 from __future__ import annotations
 
 import customtkinter as ctk
 import tkinter as tk
+
 from tkinter import filedialog as tkfiledialog
 import csv
 import ctypes
@@ -16,16 +19,17 @@ import hashlib
 import hmac
 import logging
 import os
+
 import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
 import uuid
 import webbrowser
 
 import pyperclip
+
 from cryptography.fernet import InvalidToken
 
 # ─── Package imports (modular code extracted into password_vault/) ─
@@ -68,45 +72,34 @@ log = logging.getLogger("PasswordVault")
 #                     PASSWORD  VAULT
 # ═══════════════════════════════════════════════════════════════
 class PasswordVault:
-    # ─── Cached font objects (created once, reused across all widgets) ─
-    _fonts: dict[str, ctk.CTkFont] = {}
-
-    @classmethod
-    def _f(cls, size: int = 12, weight: str = "normal",
-           family: str = "Segoe UI") -> ctk.CTkFont:
-        """Return a cached CTkFont — avoids creating thousands of duplicates."""
-        key = f"{family}:{size}:{weight}"
-        if key not in cls._fonts:
-            cls._fonts[key] = ctk.CTkFont(family=family, size=size,
-                                           weight=weight)
-        return cls._fonts[key]
-
     def __init__(self):
         self.key = None
         self.data = None
         self.floating_widget = None
+
         self.mini_vault = None
         self.current_category = "All"
+
         self._login_attempts = 0
         self._lockout_until = 0
         self._idle_timer = None
         self._main_frame = None
         self._clipboard_timer = None
         self._search_bar = None
-        self._batch_after_id = None
-        self._search_debounce_id = None
 
         self.settings = load_settings()
         ctk.set_appearance_mode("dark")
 
         self.root = ctk.CTk()
         self.root.title("Password Vault")
+
         self.root.geometry("880x600")
         self.root.minsize(720, 520)
         self.root.configure(fg_color=BG)
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_to_widget)
 
         self.root.update_idletasks()
+
         x = (self.root.winfo_screenwidth() // 2) - 440
         y = (self.root.winfo_screenheight() // 2) - 300
         self.root.geometry(f"880x600+{x}+{y}")
@@ -115,10 +108,123 @@ class PasswordVault:
             icon_path = os.path.join(APP_DIR, "icon.ico")
             if os.path.exists(icon_path):
                 self.root.iconbitmap(icon_path)
+
         except (tk.TclError, OSError):
             pass
 
+        self._setup_input_helpers()
         self.show_login()
+
+    # ─── Universal clipboard & right-click for all inputs ────
+    def _setup_input_helpers(self):
+        """Set up Ctrl+C/V/X/A (work with ANY keyboard language) and
+        right-click context menu on every Entry / Text widget."""
+
+        # ── Windows virtual-key codes (physical key, layout-independent) ──
+        _KC = {"c": 67, "v": 86, "x": 88, "a": 65}
+
+        _LATIN = {"c": "c", "v": "v", "x": "x", "a": "a"}
+
+        def _on_key(event):
+            if not (event.state & 0x4):
+                return
+            w = event.widget
+            if not isinstance(w, (tk.Entry, tk.Text)):
+                return
+            kc = event.keycode
+            ks = event.keysym.lower()
+            if kc == _KC["v"]:
+                if ks == _LATIN["v"]:
+                    return
+                w.event_generate("<<Paste>>")
+                return "break"
+            if kc == _KC["c"]:
+                if ks == _LATIN["c"]:
+                    return
+                w.event_generate("<<Copy>>")
+                return "break"
+            if kc == _KC["x"]:
+                if ks == _LATIN["x"]:
+                    return
+                w.event_generate("<<Cut>>")
+                return "break"
+            if kc == _KC["a"]:
+                if ks == _LATIN["a"]:
+                    return
+                if isinstance(w, tk.Entry):
+                    w.select_range(0, tk.END)
+                    w.icursor(tk.END)
+                else:
+                    w.tag_add("sel", "1.0", "end")
+                return "break"
+
+        self.root.bind_all("<Key>", _on_key, add="+")
+
+        # ── Right-click context menu ──────────────────────────
+        def _ctx_menu(event):
+            w = event.widget
+            if not isinstance(w, (tk.Entry, tk.Text)):
+                return
+
+            # Give focus so selection is visible
+            w.focus_set()
+
+            menu = tk.Menu(w, tearoff=0, bg=BG_SEC, fg=TEXT_PRI,
+                           activebackground=ACCENT, activeforeground="white",
+                           font=("Segoe UI", 10))
+
+            # Check selection
+            has_sel = False
+            try:
+                if isinstance(w, tk.Entry):
+                    has_sel = w.selection_present()
+                else:
+                    has_sel = bool(w.tag_ranges("sel"))
+            except tk.TclError:
+                pass
+
+            # Check clipboard
+            has_clip = True
+            try:
+                w.clipboard_get()
+            except tk.TclError:
+                has_clip = False
+
+            menu.add_command(
+                label="✂️  Cut",
+                command=lambda: w.event_generate("<<Cut>>"),
+                state="normal" if has_sel else "disabled")
+            menu.add_command(
+                label="📋  Copy",
+                command=lambda: w.event_generate("<<Copy>>"),
+                state="normal" if has_sel else "disabled")
+            menu.add_command(
+                label="📄  Paste",
+                command=lambda: w.event_generate("<<Paste>>"),
+                state="normal" if has_clip else "disabled")
+            menu.add_separator()
+            menu.add_command(
+                label="🔤  Select All",
+                command=lambda: _select_all(w))
+
+            try:
+                menu.post(event.x_root, event.y_root)
+            except tk.TclError:
+                pass
+
+        def _select_all(w):
+            try:
+                if isinstance(w, tk.Entry):
+                    w.select_range(0, tk.END)
+                    w.icursor(tk.END)
+                else:
+                    w.tag_add("sel", "1.0", "end")
+            except tk.TclError:
+                pass
+
+        # Bind to native Tk Entry and Text classes (covers CTkEntry/CTkTextbox)
+        self.root.bind_class("Entry", "<Button-3>", _ctx_menu)
+        self.root.bind_class("Text", "<Button-3>", _ctx_menu)
 
     # ─── Auto-Lock ───────────────────────────────────────────
     def _start_idle_timer(self):
@@ -166,13 +272,6 @@ class PasswordVault:
 
     def _auto_lock(self):
         log.info("Vault auto-locked due to inactivity.")
-        # Cancel any pending deferred work
-        if self._batch_after_id:
-            self.root.after_cancel(self._batch_after_id)
-            self._batch_after_id = None
-        if self._search_debounce_id:
-            self.root.after_cancel(self._search_debounce_id)
-            self._search_debounce_id = None
         # Best-effort wipe sensitive data before releasing references
         if self.key:
             self._secure_wipe(self.key)
@@ -199,13 +298,16 @@ class PasswordVault:
         self.login_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         self.login_frame.place(relx=0.5, rely=0.45, anchor="center")
 
+
         circle = ctk.CTkFrame(self.login_frame, width=90, height=90,
                                 corner_radius=45, fg_color=ACCENT)
         circle.pack(pady=(0, 18))
         circle.pack_propagate(False)
+
         ctk.CTkLabel(circle, text="🔐", font=ctk.CTkFont(size=40),
                       fg_color="transparent").place(
             relx=0.5, rely=0.5, anchor="center")
+
 
         ctk.CTkLabel(self.login_frame, text="Password Vault",
                       font=ctk.CTkFont(family="Segoe UI", size=30,
@@ -213,6 +315,7 @@ class PasswordVault:
                       text_color=TEXT_PRI).pack(pady=(0, 4))
 
         is_new = not os.path.exists(DATA_FILE)
+
         ctk.CTkLabel(
             self.login_frame,
             text=("Create a master password" if is_new
@@ -224,6 +327,7 @@ class PasswordVault:
         pw_frame.pack(pady=(0, 6))
 
         self.master_entry = ctk.CTkEntry(
+
             pw_frame, width=280, height=44,
             placeholder_text="Master Password", show="●",
             font=ctk.CTkFont(family="Segoe UI", size=14), justify="center",
@@ -231,6 +335,7 @@ class PasswordVault:
             corner_radius=12, text_color=TEXT_PRI)
         self.master_entry.pack(side="left")
         self.master_entry.bind("<Return>", lambda e: self.unlock())
+
         tip(self.master_entry,
             "Enter your master password to unlock the vault")
 
@@ -257,6 +362,7 @@ class PasswordVault:
 
         self.confirm_entry = None
         if is_new:
+
             sf = ctk.CTkFrame(self.login_frame, fg_color="transparent")
             sf.pack(fill="x", pady=(0, 6))
             self.strength_bar = ctk.CTkProgressBar(
@@ -274,6 +380,7 @@ class PasswordVault:
                 "Shows how strong your password is")
 
             self.confirm_entry = ctk.CTkEntry(
+
                 self.login_frame, width=320, height=44,
                 placeholder_text="Confirm Password", show="●",
                 font=ctk.CTkFont(family="Segoe UI", size=14),
@@ -282,6 +389,7 @@ class PasswordVault:
                 corner_radius=12, text_color=TEXT_PRI)
             self.confirm_entry.pack(pady=(0, 10))
             self.confirm_entry.bind("<Return>", lambda e: self.unlock())
+
             tip(self.confirm_entry,
                 "Re-enter your password to confirm")
 
@@ -291,6 +399,7 @@ class PasswordVault:
             width=320, height=46,
             font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
             fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=12,
+
             command=self.unlock)
         unlock_btn.pack(pady=(10, 0))
         tip(unlock_btn,
@@ -298,6 +407,7 @@ class PasswordVault:
             else "Create a new encrypted vault")
 
         self.master_entry.focus()
+
 
     def _update_login_strength(self, event=None):
         s, lbl, c = password_strength(self.master_entry.get())
@@ -317,6 +427,7 @@ class PasswordVault:
         return None
 
     def unlock(self):
+
         now = time.time()
         if now < self._lockout_until:
             remaining = int(self._lockout_until - now)
@@ -328,25 +439,31 @@ class PasswordVault:
             self.error_label.configure(text="⚠️ Enter a password")
             return
 
+
         is_new = not os.path.exists(DATA_FILE)
         if is_new:
             c = self.confirm_entry.get() if self.confirm_entry else ""
             if pw != c:
+
                 self.error_label.configure(
                     text="⚠️ Passwords don't match")
                 return
+
             err = self._validate_master_password(pw)
             if err:
                 self.error_label.configure(text=err)
                 return
 
+
         salt = get_or_create_salt()
         self.key = derive_key(pw, salt)
+
         max_att = self.settings.get("max_login_attempts",
                                      MAX_LOGIN_ATTEMPTS)
         lock_sec = self.settings.get("lockout_seconds", LOCKOUT_SECONDS)
         try:
             self.data = load_data(self.key)
+
         except InvalidToken:
             self._login_attempts += 1
             log.warning("Failed login attempt #%d.", self._login_attempts)
@@ -363,6 +480,7 @@ class PasswordVault:
                     text=f"⚠️ Wrong password ({rem} attempts left)")
             return
 
+
         self._login_attempts = 0
         log.info("Vault unlocked successfully%s.",
                  " (new vault created)" if is_new else "")
@@ -370,11 +488,13 @@ class PasswordVault:
             save_data(self.data, self.key)
         self.login_frame.destroy()
         self.build_ui()
+
         self._start_idle_timer()
         self._bind_shortcuts()
 
     # ─── Main UI ─────────────────────────────────────────────
     def build_ui(self):
+
         self._main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         self._main_frame.pack(fill="both", expand=True)
 
@@ -384,6 +504,7 @@ class PasswordVault:
         top.pack(fill="x")
         top.pack_propagate(False)
 
+
         ctk.CTkLabel(top, text="🔐", font=ctk.CTkFont(size=20)).pack(
             side="left", padx=(16, 6))
         ctk.CTkLabel(top, text="Password Vault",
@@ -392,9 +513,9 @@ class PasswordVault:
                       text_color=TEXT_PRI).pack(side="left")
 
         self.search_var = ctk.StringVar()
-        self._search_debounce_id = None
+
         self.search_var.trace_add("write",
-                                   lambda *_: self._debounced_search())
+                                   lambda *_: self.refresh_entries())
 
         self._search_bar = make_search_bar(
             top, self.search_var,
@@ -423,24 +544,29 @@ class PasswordVault:
         tip(add_btn, "Add a new password entry  (Ctrl+N)")
 
         # Content
+
         content = ctk.CTkFrame(self._main_frame, fg_color="transparent")
         content.pack(fill="both", expand=True)
 
         # Sidebar
+
         self.sidebar = ctk.CTkFrame(content, width=200,
                                       fg_color=SIDEBAR_BG, corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
+
 
         ctk.CTkLabel(self.sidebar, text="Categories",
                       font=ctk.CTkFont(family="Segoe UI", size=11),
                       text_color=TEXT_SEC).pack(
             pady=(16, 8), padx=16, anchor="w")
 
+
         self.cat_frame = ctk.CTkScrollableFrame(
             self.sidebar, fg_color="transparent",
             scrollbar_button_color=SIDEBAR_BG)
         self.cat_frame.pack(fill="both", expand=True, padx=6, pady=(0, 4))
+
 
         add_cat_btn = ctk.CTkButton(
             self.sidebar, text="＋  Category", height=30,
@@ -454,6 +580,7 @@ class PasswordVault:
             "Create a new category to organize passwords")
 
         # Entries
+
         self.entries_panel = ctk.CTkScrollableFrame(
             content, fg_color=BG, corner_radius=0,
             scrollbar_button_color=BG_SEC)
@@ -462,12 +589,6 @@ class PasswordVault:
         self.refresh_categories()
         self.refresh_entries()
 
-    def _debounced_search(self):
-        """Debounce search input — only refresh after 250ms of inactivity."""
-        if self._search_debounce_id:
-            self.root.after_cancel(self._search_debounce_id)
-        self._search_debounce_id = self.root.after(
-            250, self.refresh_entries)
 
     def _search_cat_filter(self, cat):
         self.current_category = cat
@@ -915,17 +1036,22 @@ class PasswordVault:
             if cat == "All":
                 count = len(self.data["entries"])
             else:
+
                 count = sum(1 for e in self.data["entries"]
                             if e.get("category") == cat)
             emoji = "🗂️" if cat == "All" else cat_emoji(cat)
             active = cat == self.current_category
 
+
             row = ctk.CTkFrame(self.cat_frame, fg_color="transparent")
             row.pack(fill="x", pady=1)
 
             btn = ctk.CTkButton(
+
                 row, text=f" {emoji}  {cat}   ({count})",
-                font=self._f(12, "bold" if active else "normal"),
+                font=ctk.CTkFont(
+                    family="Segoe UI", size=12,
+                    weight="bold" if active else "normal"),
                 fg_color=SIDEBAR_SEL if active else "transparent",
                 hover_color=(ACCENT_HOVER if active else BG_TERT),
                 text_color="white" if active else TEXT_PRI,
@@ -949,6 +1075,7 @@ class PasswordVault:
         self.current_category = cat
         self.refresh_categories()
         self.refresh_entries()
+
 
     # ─── Delete Category ─────────────────────────────────────
     def confirm_delete_category(self, cat_name):
@@ -995,24 +1122,20 @@ class PasswordVault:
             command=dlg.destroy).pack(side="right", padx=4)
 
     # ─── Entries ─────────────────────────────────────────────
-    _CARD_BATCH_SIZE = 20  # render in batches to keep UI responsive
-
     def refresh_entries(self):
-        # Cancel any pending batch render from a previous refresh
-        if hasattr(self, "_batch_after_id") and self._batch_after_id:
-            self.root.after_cancel(self._batch_after_id)
-            self._batch_after_id = None
-
         for w in self.entries_panel.winfo_children():
             w.destroy()
+
         search = ""
         if hasattr(self, "search_var"):
             search = self.search_var.get().lower()
         entries = list(self.data["entries"])
         if self.current_category != "All":
+
             entries = [e for e in entries
                        if e.get("category") == self.current_category]
         if search:
+
             entries = [e for e in entries
                        if search in e.get("title", "").lower()
                        or search in e.get("username", "").lower()
@@ -1023,35 +1146,24 @@ class PasswordVault:
         entries.sort(key=lambda e: (not e.get("pinned", False),
                                      e.get("title", "").lower()))
         if not entries:
+
             ef = ctk.CTkFrame(self.entries_panel, fg_color="transparent")
             ef.pack(expand=True, fill="both")
             ctk.CTkLabel(ef, text="📭",
                           font=ctk.CTkFont(size=48)).pack(pady=(80, 8))
             ctk.CTkLabel(ef, text="No passwords yet",
-                          font=self._f(15),
+                          font=ctk.CTkFont(family="Segoe UI", size=15),
                           text_color=TEXT_TERT).pack()
             ctk.CTkLabel(ef,
                           text="Click '＋ Add New' to get started",
-                          font=self._f(12),
+                          font=ctk.CTkFont(family="Segoe UI", size=12),
                           text_color=TEXT_QUAT).pack(pady=(4, 0))
             return
-
-        # Render first batch immediately, rest in idle callbacks
-        self._render_entries_batch(entries, 0)
-
-    def _render_entries_batch(self, entries, start):
-        """Render a batch of cards, scheduling the next batch via after_idle."""
-        end = min(start + self._CARD_BATCH_SIZE, len(entries))
-        for i in range(start, end):
-            self._card(entries[i])
-        if end < len(entries):
-            self._batch_after_id = self.root.after_idle(
-                lambda: self._render_entries_batch(entries, end))
-        else:
-            self._batch_after_id = None
+        for entry in entries:
+            self._card(entry)
 
     def _card(self, entry):
-        _f = self._f  # local alias for speed
+
         color_key = entry.get("color", "default")
         cc = CARD_COLORS.get(color_key, CARD_COLORS["default"])
 
@@ -1070,11 +1182,14 @@ class PasswordVault:
                 x=3, y=6, relheight=0.78)
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
+
         inner.pack(fill="x", padx=(14 if cc["strip"] else 12), pady=6)
         inner.bind("<Button-3>", _on_right_click)
 
+
         # Row 1: Pin + Title + Category badge + Age + Edit + Delete
         r1 = ctk.CTkFrame(inner, fg_color="transparent")
+
         r1.pack(fill="x", pady=(0, 2))
         r1.bind("<Button-3>", _on_right_click)
 
@@ -1084,7 +1199,7 @@ class PasswordVault:
             r1, text="📌" if is_pinned else "○",
             width=24, height=24, fg_color="transparent",
             hover_color=BG_TERT, corner_radius=5,
-            font=_f(11 if is_pinned else 9),
+            font=ctk.CTkFont(size=11 if is_pinned else 9),
             text_color=YELLOW if is_pinned else TEXT_QUAT,
             command=lambda: self._toggle_pin(entry))
         pin_btn.pack(side="left", padx=(0, 2))
@@ -1092,11 +1207,13 @@ class PasswordVault:
             "Unpin from top" if is_pinned else "Pin to top")
 
         emoji = cat_emoji(entry.get("category", ""))
+
         ctk.CTkLabel(r1, text=f"{emoji}  {entry.get('title', '')}",
-                      font=_f(13, "bold"),
+                      font=ctk.CTkFont(family="Segoe UI", size=13,
+                                        weight="bold"),
                       text_color=TEXT_PRI).pack(side="left")
         ctk.CTkLabel(r1, text=f" {entry.get('category', '')} ",
-                      font=_f(9),
+                      font=ctk.CTkFont(family="Segoe UI", size=9),
                       text_color=TEXT_SEC, fg_color=BADGE_BG,
                       corner_radius=4).pack(side="left", padx=(8, 0))
 
@@ -1104,7 +1221,7 @@ class PasswordVault:
         del_btn = ctk.CTkButton(
             r1, text="🗑", width=24, height=24, fg_color="transparent",
             hover_color=RED_HOVER, corner_radius=5,
-            font=_f(11),
+            font=ctk.CTkFont(size=11),
             command=lambda: self.confirm_delete(entry))
         del_btn.pack(side="right", padx=1)
         tip(del_btn, "Move to Recycle Bin")
@@ -1113,7 +1230,7 @@ class PasswordVault:
         edit_btn = ctk.CTkButton(
             r1, text="✏", width=24, height=24, fg_color="transparent",
             hover_color=BG_TERT, corner_radius=5,
-            font=_f(11),
+            font=ctk.CTkFont(size=11),
             command=lambda: self.show_entry_dialog(entry))
         edit_btn.pack(side="right", padx=1)
         tip(edit_btn, "Edit this entry")
@@ -1122,24 +1239,26 @@ class PasswordVault:
         age_t, age_c = password_age_text(
             entry.get("modified_at") or entry.get("created_at"))
         if age_t:
-            ctk.CTkLabel(r1, text=age_t, font=_f(9),
+            ctk.CTkLabel(r1, text=age_t, font=ctk.CTkFont(size=9),
                           text_color=age_c).pack(
                 side="right", padx=(0, 6))
 
         # Row 2: User + Copy user + URL + Password + Eye + Copy pass
         r2 = ctk.CTkFrame(inner, fg_color="transparent")
+
         r2.pack(fill="x", pady=(0, 1))
         r2.bind("<Button-3>", _on_right_click)
 
         ctk.CTkLabel(r2, text=f"👤 {entry.get('username', '')}",
-                      font=_f(11),
+                      font=ctk.CTkFont(family="Segoe UI", size=11),
                       text_color=TEXT_SEC, anchor="w").pack(side="left")
         cu = ctk.CTkButton(
             r2, text="📋", width=28, height=22,
-            font=_f(10),
+            font=ctk.CTkFont(size=10),
             fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG,
             corner_radius=5,
-            command=lambda: self._copy(entry.get("username", ""), cu))
+                            command=lambda: self._copy(entry.get("username", ""), cu))
+
         cu.pack(side="left", padx=(6, 0))
         tip(cu, "Copy username")
 
@@ -1148,7 +1267,7 @@ class PasswordVault:
         if url:
             url_btn = ctk.CTkButton(
                 r2, text="🌐", width=28, height=22,
-                font=_f(10),
+                font=ctk.CTkFont(size=10),
                 fg_color=BG_TERT, hover_color=TEXT_QUAT,
                 text_color=TEAL, corner_radius=5,
                 command=lambda u=url: webbrowser.open(u))
@@ -1156,32 +1275,37 @@ class PasswordVault:
             tip(url_btn, f"Open {url}")
 
         pwd = entry.get("password", "")
+
         cp = ctk.CTkButton(
             r2, text="🔑 Copy", width=65, height=22,
-            font=_f(10),
+            font=ctk.CTkFont(size=10),
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color="white", corner_radius=5,
-            command=lambda: self._copy(pwd, cp))
+                            command=lambda: self._copy(pwd, cp))
         cp.pack(side="right")
+
         tip(cp, "Copy password")
 
         plbl = ctk.CTkLabel(r2, text="●" * min(len(pwd), 12),
-                              font=_f(11),
+                              font=ctk.CTkFont(size=11),
                               text_color=TEXT_TERT, anchor="e")
         plbl.pack(side="right", padx=(0, 4))
 
         def toggle(lbl=plbl, real=pwd):
             if "●" in lbl.cget("text"):
+
                 lbl.configure(text=real[:20])
                 eye.configure(text="🙈")
             else:
+
                 lbl.configure(text="●" * min(len(real), 12))
                 eye.configure(text="👁")
+
 
         eye = ctk.CTkButton(
             r2, text="👁", width=24, height=22, fg_color="transparent",
             hover_color=BG_TERT, corner_radius=5,
-            font=_f(10), command=toggle)
+            font=ctk.CTkFont(size=10), command=toggle)
         eye.pack(side="right", padx=(0, 2))
         tip(eye, "Show / hide password")
 
@@ -1189,22 +1313,24 @@ class PasswordVault:
         if url:
             ctk.CTkLabel(inner,
                           text=f"🔗 {url[:60]}{'…' if len(url) > 60 else ''}",
-                          font=_f(10),
+                          font=ctk.CTkFont(family="Segoe UI", size=10),
                           text_color=TEAL, anchor="w", cursor="hand2").pack(
                 fill="x", pady=(1, 0))
 
         # Row 4: Notes
         notes = entry.get("notes", "")
         if notes:
+
             ctk.CTkLabel(inner, text=notes,
-                          font=_f(10),
+                          font=ctk.CTkFont(family="Segoe UI", size=10),
                           text_color=TEXT_TERT, anchor="w",
                           wraplength=400, justify="left").pack(
                 fill="x", pady=(2, 0))
 
     def _toggle_pin(self, entry):
         entry["pinned"] = not entry.get("pinned", False)
-        self._save_and_refresh()
+        save_data(self.data, self.key)
+        self.refresh_entries()
 
     def _save_and_refresh(self):
         """Save data and refresh all views (entries + categories + mini vault)."""
@@ -1219,6 +1345,7 @@ class PasswordVault:
                 pass
 
     def _copy(self, text, btn):
+
         self._copy_to_clipboard(text, btn)
 
     def _clear_clipboard(self):
@@ -1481,8 +1608,7 @@ class PasswordVault:
 
         # Info label
         info_lbl = ctk.CTkLabel(
-            form, text="💡 Password will be auto-filled (PuTTY: -pw flag, "
-                       "others: clipboard paste)",
+            form, text="💡 Password will be copied to clipboard",
             font=ctk.CTkFont(size=9), text_color=TEXT_TERT)
         info_lbl.pack(fill="x")
 
@@ -1494,11 +1620,13 @@ class PasswordVault:
             if not host:
                 err.configure(text="⚠️ Host / IP is required")
                 return
+
             try:
                 port = int(port_str)
             except ValueError:
                 err.configure(text="⚠️ Invalid port number")
                 return
+
             if not clients:
                 err.configure(text="⚠️ No SSH client found on system")
                 return
@@ -1513,11 +1641,13 @@ class PasswordVault:
                 err.configure(text="⚠️ SSH client not found")
                 return
 
-            password = entry.get("password", "")
+            # Copy password to clipboard
+            self._copy_to_clipboard(entry.get("password", ""))
 
             dlg.destroy()
+
             self._launch_ssh(client_path, selected, host, user,
-                             port, entry.get("title", ""), password)
+                             port, entry.get("title", ""))
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 12))
@@ -1561,134 +1691,56 @@ class PasswordVault:
     @staticmethod
     def _sanitize_shell_arg(value: str) -> str:
         """Remove dangerous characters from a value used in shell args."""
-        # Allow alphanumeric, dots, hyphens, underscores, @, colons, backslash (for domain\user)
+        # Allow alphanumeric, dots, hyphens, underscores, @, colons,
+        # backslash (for domain\user), forward slash
         return re.sub(r'[^a-zA-Z0-9.\-_@:/\\ ]', '', value)
 
-    def _auto_type_password(self, password, delay_seconds=3,
-                             window_title_hint=""):
-        """Auto-type password into the SSH/RDP window after a delay.
-
-        Copies password to clipboard, waits for the target window to show
-        the password prompt, verifies the foreground window title contains
-        the expected hint, then sends Ctrl+V followed by Enter.
-        Runs in a background thread so the UI stays responsive.
-
-        Safety: if the foreground window doesn't match *window_title_hint*
-        the password is NOT typed — it stays in clipboard for manual paste.
-        """
-        def _worker():
-            try:
-                user32 = ctypes.windll.user32
-
-                # Copy password to clipboard (thread-safe via pyperclip)
-                pyperclip.copy(password)
-
-                # Wait for the SSH window to reach the password prompt
-                time.sleep(delay_seconds)
-
-                # ── Safety check: verify foreground window ──
-                if window_title_hint:
-                    hwnd = user32.GetForegroundWindow()
-                    if hwnd:
-                        buf = ctypes.create_unicode_buffer(256)
-                        user32.GetWindowTextW(hwnd, buf, 256)
-                        fg_title = buf.value.lower()
-                        hint_lower = window_title_hint.lower()
-                        # Allow partial match (e.g. "SSH -" in title)
-                        if (hint_lower not in fg_title
-                                and "ssh" not in fg_title
-                                and "putty" not in fg_title
-                                and "moba" not in fg_title
-                                and "cmd" not in fg_title):
-                            log.warning(
-                                "Auto-type aborted: foreground window "
-                                "'%s' doesn't match hint '%s'. "
-                                "Password is in clipboard.",
-                                fg_title, hint_lower)
-                            return
-
-                # ── key constants ──
-                VK_CONTROL = 0x11
-                VK_V       = 0x56
-                VK_RETURN  = 0x0D
-                KEYEVENTF_KEYUP = 0x0002
-
-                # Ctrl+V  (paste)
-                user32.keybd_event(VK_CONTROL, 0, 0, 0)
-                time.sleep(0.05)
-                user32.keybd_event(VK_V, 0, 0, 0)
-                time.sleep(0.05)
-                user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
-                time.sleep(0.05)
-                user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-
-                # Small pause then Enter
-                time.sleep(0.3)
-                user32.keybd_event(VK_RETURN, 0, 0, 0)
-                time.sleep(0.05)
-                user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
-
-            except Exception as e:
-                log.warning("Auto-type password failed: %s", e)
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-
-    def _launch_ssh(self, client_path, client_name, host, user, port, title, password=""):
-        """Launch SSH session using the selected client with auto-login."""
+    def _launch_ssh(self, client_path, client_name, host, user, port, title):
+        """Launch SSH session using the selected client."""
         # Sanitize all user-supplied values to prevent command injection
         host = self._sanitize_shell_arg(host)
         user = self._sanitize_shell_arg(user)
         port = int(port)
         try:
             if client_name == "PuTTY":
-                # PuTTY supports -pw flag directly for auto-login
                 cmd = [client_path, "-ssh"]
                 if user:
                     cmd += ["-l", user]
                 if port != 22:
                     cmd += ["-P", str(port)]
-                if password:
-                    cmd += ["-pw", password]
                 cmd.append(host)
                 subprocess.Popen(cmd)
 
             elif client_name == "MobaXterm":
-                # Escape backslash in username for MobaXterm command string
-                user_escaped = user.replace("\\", "\\\\") if user else ""
-                ssh_uri = f"{user_escaped}@{host}" if user_escaped else host
+                # Use -l flag to preserve backslash in domain\user
+                ssh_parts = ["ssh"]
+                if user:
+                    # Single-quote the username so MobaXterm's internal
+                    # bash does not interpret the backslash as escape
+                    safe_user = user.replace("'", "'\\''")
+                    ssh_parts += ["-l", f"'{safe_user}'"]
                 if port != 22:
-                    ssh_uri += f" -p {port}"
-                # Launch MobaXterm SSH tab
-                cmd = [client_path, "-newtab", f"ssh {ssh_uri}"]
-                subprocess.Popen(cmd)
-                # Auto-type password after MobaXterm shows the prompt
-                if password:
-                    self._auto_type_password(
-                        password, delay_seconds=4,
-                        window_title_hint="MobaXterm")
+                    ssh_parts += ["-p", str(port)]
+                ssh_parts.append(host)
+                subprocess.Popen([client_path, "-newtab",
+                                  " ".join(ssh_parts)])
 
             elif client_name == "Windows SSH":
-                # Build argument list
+                # Use -l flag to preserve backslash in domain\user
                 cmd = [client_path]
-                target = f"{user}@{host}" if user else host
-                cmd.append(target)
+                if user:
+                    cmd += ["-l", user]
+                cmd.append(host)
                 if port != 22:
                     cmd += ["-p", str(port)]
-                win_title = self._sanitize_shell_arg(
-                    f"SSH - {title} ({host})")
                 # Open in a new visible console window
                 subprocess.Popen(
-                    ["cmd", "/c", "start", win_title,
+                    ["cmd", "/c", "start",
+                     self._sanitize_shell_arg(
+                         f"SSH - {title} ({host})"),
                      "cmd", "/k"] + cmd,
                     creationflags=subprocess.CREATE_NEW_CONSOLE
                 )
-                # Auto-type password after the prompt appears
-                if password:
-                    self._auto_type_password(
-                        password, delay_seconds=3,
-                        window_title_hint=win_title)
-
         except OSError as exc:
             log.warning("Failed to launch SSH client %s: %s",
                         client_name, exc)
@@ -1737,6 +1789,7 @@ class PasswordVault:
         user_e.pack(fill="x", pady=(0, 6))
         user_e.insert(0, entry.get("username", ""))
 
+
         # Port
         port_row = ctk.CTkFrame(form, fg_color="transparent")
         port_row.pack(fill="x", pady=(2, 6))
@@ -1758,14 +1811,12 @@ class PasswordVault:
 
         # Info label
         ctk.CTkLabel(
-            form, text="💡 Password will be auto-filled via Windows Credential Manager",
+            form, text="💡 Password will be copied to clipboard",
             font=ctk.CTkFont(size=9), text_color=TEXT_TERT).pack(fill="x")
 
         def connect():
             host = host_e.get().strip()
-            user = user_e.get().strip()
             port_str = port_e.get().strip()
-            password = entry.get("password", "")
 
             if not host:
                 err.configure(text="⚠️ Host / IP is required")
@@ -1776,42 +1827,16 @@ class PasswordVault:
                 err.configure(text="⚠️ Invalid port number")
                 return
 
+            # Copy password to clipboard
+            self._copy_to_clipboard(entry.get("password", ""))
+
             dlg.destroy()
 
-            # Sanitize to prevent injection
+            # Launch RDP — sanitize to prevent injection
             host = self._sanitize_shell_arg(host)
-            user = self._sanitize_shell_arg(user)
-            rdp_target = f"{host}:{port}" if port != 3389 else host
-
             try:
-                # Store credentials temporarily using cmdkey
-                # so mstsc picks them up automatically
-                if user and password:
-                    subprocess.run(
-                        ["cmdkey", f"/generic:TERMSRV/{host}",
-                         f"/user:{user}", f"/pass:{password}"],
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                        check=False
-                    )
-
-                # Launch RDP
+                rdp_target = f"{host}:{port}" if port != 3389 else host
                 subprocess.Popen(["mstsc", f"/v:{rdp_target}"])
-
-                # Schedule credential cleanup after 30 seconds
-                # (enough time for mstsc to read them)
-                if user and password:
-                    def _cleanup():
-                        time.sleep(30)
-                        try:
-                            subprocess.run(
-                                ["cmdkey", f"/delete:TERMSRV/{host}"],
-                                creationflags=subprocess.CREATE_NO_WINDOW,
-                                check=False
-                            )
-                        except Exception:
-                            pass
-                    threading.Thread(target=_cleanup, daemon=True).start()
-
             except OSError as exc:
                 log.warning("Failed to launch RDP: %s", exc)
 
@@ -1970,6 +1995,7 @@ class PasswordVault:
         title_e = ios_field(g1, "Title", idx=0, value=title_val,
                              height=30)
         cats = self.data.get("categories", ["General"])
+
         cat_val = (entry.get("category", cats[0] if cats else "")
                    if is_edit else (cats[0] if cats else ""))
         cat_cb = ios_combo(g1, "Category", cats, cat_val, idx=1)
@@ -2127,6 +2153,7 @@ class PasswordVault:
         err.pack(pady=(0, 2))
 
         def save():
+
             t = title_e.get().strip()
             p = pass_e.get().strip()
             if not t:
@@ -2159,6 +2186,7 @@ class PasswordVault:
             self.refresh_categories()
             self.refresh_entries()
 
+
         save_btn = ctk.CTkButton(
             bottom,
             text="💾  Save Changes" if is_edit else "💾  Save",
@@ -2172,6 +2200,7 @@ class PasswordVault:
 
     # ─── Delete Confirm (→ Recycle Bin) ──────────────────────
     def confirm_delete(self, entry):
+
         dlg = self._make_dialog("Delete", 360, 175)
 
         ctk.CTkLabel(dlg, text="⚠️  Move to Recycle Bin?",
@@ -2188,6 +2217,7 @@ class PasswordVault:
         bf.pack(fill="x", padx=24)
 
         def do_del():
+
             eid = entry.get("id")
             # Move to trash
             trash_entry = dict(entry)
@@ -2208,6 +2238,7 @@ class PasswordVault:
             self.refresh_categories()
             self.refresh_entries()
 
+
         ctk.CTkButton(
             bf, text="Delete", fg_color=RED, hover_color=RED_HOVER,
             width=140, height=36, font=ctk.CTkFont(size=13),
@@ -2220,6 +2251,7 @@ class PasswordVault:
 
     # ─── Add Category ────────────────────────────────────────
     def show_add_cat_dialog(self):
+
         dlg = self._make_dialog("New Category", 350, 185)
 
         ctk.CTkLabel(dlg, text="📁  New Category",
@@ -2227,11 +2259,13 @@ class PasswordVault:
                                         weight="bold"),
                       text_color=TEXT_PRI).pack(pady=(14, 10))
         frm = ctk.CTkFrame(dlg, fg_color="transparent")
+
         frm.pack(fill="both", expand=True, padx=18, pady=(0, 12))
         g = ios_group(frm)
         cat_e = ios_field(g, "Name", idx=0,
                            placeholder="Category name")
         cat_e.focus()
+
         err = ctk.CTkLabel(frm, text="", text_color=RED,
                             font=ctk.CTkFont(size=11))
         err.pack(pady=(2, 4))
@@ -2250,6 +2284,7 @@ class PasswordVault:
             self.refresh_categories()
 
         cat_e.bind("<Return>", lambda e: save())
+
         ctk.CTkButton(
             frm, text="＋  Add", height=36,
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
@@ -2805,6 +2840,7 @@ class PasswordVault:
         self.floating_widget.deiconify()
 
     def restore_window(self):
+
         if self.mini_vault:
             try:
                 self.mini_vault.withdraw()
@@ -2815,22 +2851,20 @@ class PasswordVault:
         self.root.attributes("-topmost", True)
         self.root.lift()
         self.root.focus_force()
+        
         self.root.after(
             300, lambda: self.root.attributes("-topmost", False))
         if self.floating_widget:
             self.floating_widget.withdraw()
 
     def quit_app(self):
+
         log.info("Application exiting.")
         try:
             if self._clipboard_timer:
                 self.root.after_cancel(self._clipboard_timer)
             if self._idle_timer:
                 self.root.after_cancel(self._idle_timer)
-            if self._batch_after_id:
-                self.root.after_cancel(self._batch_after_id)
-            if self._search_debounce_id:
-                self.root.after_cancel(self._search_debounce_id)
         except tk.TclError:
             pass
         if self.mini_vault:
@@ -2851,6 +2885,7 @@ class PasswordVault:
 
     def _center(self, dlg, w, h):
         dlg.update_idletasks()
+
         cx = (self.root.winfo_x()
               + (self.root.winfo_width() // 2) - (w // 2))
         cy = (self.root.winfo_y()
@@ -2890,6 +2925,7 @@ class PasswordVault:
                 clear_sec * 1000, self._clear_clipboard)
 
     def run(self):
+
         if (self.settings.get("start_minimized", False)
                 and os.path.exists(DATA_FILE)):
             self.root.after(200, self.minimize_to_widget)
@@ -2898,3 +2934,4 @@ class PasswordVault:
 
 if __name__ == "__main__":
     PasswordVault().run()
+

@@ -22,9 +22,6 @@ from .settings import DATA_DIR, TRASH_DAYS
 
 log = logging.getLogger("PasswordVault")
 
-# Track which files already had permissions restricted this session
-_restricted_files: set[str] = set()
-
 # ─── Paths ────────────────────────────────────────────────────
 _EXE_DIR = os.path.dirname(os.path.abspath(
     sys.executable if getattr(sys, "frozen", False) else __file__))
@@ -42,16 +39,10 @@ APP_DIR = _EXE_DIR
 
 
 def _restrict_file(path: str) -> None:
-    """Set restrictive permissions on *path* (owner read/write only).
-
-    Skips the (expensive) ``icacls`` subprocess if already applied this
-    session — the ACLs survive ``os.replace`` on the same path.
-    """
-    real = os.path.realpath(path)
-    if real in _restricted_files:
-        return  # already restricted this session
+    """Set restrictive permissions on *path* (owner read/write only)."""
     try:
         if sys.platform == "win32":
+            # On Windows: remove inherited ACLs, keep owner only
             import subprocess as _sp
             _sp.run(
                 ["icacls", path, "/inheritance:r",
@@ -61,7 +52,6 @@ def _restrict_file(path: str) -> None:
             )
         else:
             os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-        _restricted_files.add(real)
     except OSError:
         pass
 
