@@ -91,6 +91,20 @@ def safe_cfg(btn, text: str, fg_color) -> None:
         pass
 
 
+def bind_right_click_recursive(widget, callback) -> None:
+    """Bind <Button-3> to *widget* and every descendant.
+
+    Used so that right-clicking anywhere on a composite card (frame, label,
+    button, etc.) reliably triggers the same context menu.
+    """
+    try:
+        widget.bind("<Button-3>", callback, add="+")
+        for child in widget.winfo_children():
+            bind_right_click_recursive(child, callback)
+    except (tk.TclError, AttributeError):
+        pass
+
+
 # ─── iOS Group / Field Helpers ───────────────────────────────
 def ios_group(parent, title: str | None = None, compact: bool = False):
     wrapper = ctk.CTkFrame(parent, fg_color="transparent")

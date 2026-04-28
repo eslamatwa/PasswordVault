@@ -59,6 +59,7 @@ from password_vault.export_import import (
 )
 from password_vault.ui.widgets import (
     tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
+    bind_right_click_recursive,
 )
 from password_vault.ui.mini_vault import MiniVault
 from password_vault.ui.floating import FloatingWidget
@@ -1170,10 +1171,8 @@ class PasswordVault:
                               corner_radius=10)
         card.pack(fill="x", pady=2, padx=8)
 
-        # Right-click context menu binding
         def _on_right_click(event, e=entry):
             self._show_context_menu(event, e)
-        card.bind("<Button-3>", _on_right_click)
 
         if cc["strip"]:
             ctk.CTkFrame(card, width=3, fg_color=cc["strip"],
@@ -1183,14 +1182,12 @@ class PasswordVault:
         inner = ctk.CTkFrame(card, fg_color="transparent")
 
         inner.pack(fill="x", padx=(14 if cc["strip"] else 12), pady=6)
-        inner.bind("<Button-3>", _on_right_click)
 
 
         # Row 1: Pin + Title + Category badge + Age + Edit + Delete
         r1 = ctk.CTkFrame(inner, fg_color="transparent")
 
         r1.pack(fill="x", pady=(0, 2))
-        r1.bind("<Button-3>", _on_right_click)
 
         # Pin toggle
         is_pinned = entry.get("pinned", False)
@@ -1246,7 +1243,6 @@ class PasswordVault:
         r2 = ctk.CTkFrame(inner, fg_color="transparent")
 
         r2.pack(fill="x", pady=(0, 1))
-        r2.bind("<Button-3>", _on_right_click)
 
         ctk.CTkLabel(r2, text=f"👤 {entry.get('username', '')}",
                       font=ctk.CTkFont(family="Segoe UI", size=11),
@@ -1325,6 +1321,10 @@ class PasswordVault:
                           text_color=TEXT_TERT, anchor="w",
                           wraplength=400, justify="left").pack(
                 fill="x", pady=(2, 0))
+
+        # Bind right-click to the entire card and every child so the menu
+        # opens regardless of where on the card the user clicks.
+        bind_right_click_recursive(card, _on_right_click)
 
     def _toggle_pin(self, entry):
         entry["pinned"] = not entry.get("pinned", False)

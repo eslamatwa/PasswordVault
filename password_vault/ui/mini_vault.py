@@ -15,7 +15,9 @@ from ..theme import (
     CARD_COLORS, cat_emoji, SEPARATOR,
 )
 from ..security import password_age_text
-from .widgets import make_search_bar, tip, safe_cfg
+from .widgets import (
+    make_search_bar, tip, safe_cfg, bind_right_click_recursive,
+)
 
 
 class MiniVault(ctk.CTkToplevel):
@@ -128,15 +130,6 @@ class MiniVault(ctk.CTkToplevel):
             return
         for entry in entries:
             self._mini_card(entry)
-
-    def _bind_right_click_recursive(self, widget, callback):
-        """Bind right-click to a widget and ALL its children recursively."""
-        widget.bind("<Button-3>", callback)
-        try:
-            for child in widget.winfo_children():
-                self._bind_right_click_recursive(child, callback)
-        except (tk.TclError, AttributeError):
-            pass
 
     def _show_mini_context_menu(self, event, entry):
         """Show right-click context menu directly in Mini Vault."""
@@ -294,9 +287,10 @@ class MiniVault(ctk.CTkToplevel):
         edit_btn.pack(side="right")
         tip(edit_btn, "Edit this entry")
 
-        # Apply right-click binding to card + ALL children recursively
-        self.after(50, lambda: self._bind_right_click_recursive(
-            card, _on_right_click))
+        # Apply right-click binding to card + ALL children recursively.
+        # Done synchronously here (the card is fully built above) — no
+        # after-delay needed.
+        bind_right_click_recursive(card, _on_right_click)
 
     def _mini_edit(self, entry):
         self.app.restore_window()
