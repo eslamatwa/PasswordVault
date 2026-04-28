@@ -1,7 +1,7 @@
 ; ── Password Vault Installer Script (Inno Setup) ──
 
 #define MyAppName "Password Vault"
-#define MyAppVersion "3.3"
+#define MyAppVersion "3.4"
 #define MyAppPublisher "Eslam Atwa"
 #define MyAppExeName "PasswordVault.exe"
 
@@ -14,9 +14,9 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-OutputDir=D:\PasswordVault\PasswordVault\installer
+OutputDir={#SourcePath}\installer
 OutputBaseFilename=PasswordVault_Setup_v{#MyAppVersion}
-SetupIconFile=D:\PasswordVault\PasswordVault\icon.ico
+SetupIconFile={#SourcePath}\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
 SolidCompression=yes
@@ -38,10 +38,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
 
 [Files]
-Source: "D:\PasswordVault\PasswordVault\dist\PasswordVault.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\PasswordVault\PasswordVault\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\PasswordVault\PasswordVault\FEATURES.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\PasswordVault\PasswordVault\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\dist\PasswordVault.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\FEATURES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourcePath}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon

@@ -15,7 +15,7 @@ from ..theme import (
     CARD_COLORS, cat_emoji, SEPARATOR,
 )
 from ..security import password_age_text
-from .widgets import make_search_bar, tip
+from .widgets import make_search_bar, tip, safe_cfg
 
 
 class MiniVault(ctk.CTkToplevel):
@@ -307,12 +307,5 @@ class MiniVault(ctk.CTkToplevel):
         orig = btn.cget("text")
         orig_fg = btn.cget("fg_color")
         btn.configure(text="✅ Copied!", fg_color=GREEN)
-        self.after(1000, lambda: self._safe_cfg(btn, orig, orig_fg))
-
-    @staticmethod
-    def _safe_cfg(btn, t, fg):
-        try:
-            btn.configure(text=t, fg_color=fg)
-        except (tk.TclError, ValueError):
-            pass
+        self.after(1000, lambda: safe_cfg(btn, orig, orig_fg))
 

@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import datetime
 import hashlib
-import http.client
 import logging
 import secrets
 import string
 import threading
 import time
+import urllib.error
+import urllib.request
 
 from . import APP_VERSION
 from .settings import PASSWORD_AGE_WARNING
@@ -22,22 +23,42 @@ log = logging.getLogger("PasswordVault")
 
 # ─── Password Strength ───────────────────────────────────────
 def password_strength(pw: str) -> tuple[int, str, str]:
-    """Return ``(score 0-4, label, hex_color)`` for *pw*."""
+    """Return ``(score 0-4, label, hex_color)`` for *pw*.
+
+    Scoring (entropy-ish, monotonic in length and character classes):
+      length: 0/1/2/3 for <8 / 8-11 / 12-15 / 16+
+      classes: +1 if at least 3 of {upper, lower, digit, symbol} are present
+      bonus:  +1 if all 4 classes are present AND length >= 12
+    Final score is capped to 4.
+    """
     if not pw:
         return 0, "", TEXT_QUAT
-    score = 0
-    if len(pw) >= 8:
+
+    if len(pw) >= 16:
+        length_pts = 3
+    elif len(pw) >= 12:
+        length_pts = 2
+    elif len(pw) >= 8:
+        length_pts = 1
+    else:
+        length_pts = 0
+
+    classes = sum([
+        any(c.isupper() for c in pw),
+        any(c.islower() for c in pw),
+        any(c.isdigit() for c in pw),
+        any(c in string.punctuation for c in pw),
+    ])
+
+    score = length_pts
+    if classes >= 3:
         score += 1
-    if len(pw) >= 12:
+    if classes == 4 and len(pw) >= 12:
         score += 1
-    if any(c.isupper() for c in pw) and any(c.islower() for c in pw):
-        score += 1
-    if any(c.isdigit() for c in pw):
-        score += 0.5
-    if any(c in string.punctuation for c in pw):
-        score += 0.5
-    score = min(int(score), 4)
-    labels = {0: "Very Weak", 1: "Weak", 2: "Fair", 3: "Strong", 4: "Very Strong"}
+    score = min(score, 4)
+
+    labels = {0: "Very Weak", 1: "Weak", 2: "Fair",
+              3: "Strong", 4: "Very Strong"}
     colors = {0: RED, 1: RED, 2: ORANGE, 3: GREEN, 4: GREEN}
     return score, labels[score], colors[score]
 
@@ -113,26 +134,26 @@ def check_hibp_batch(
             try:
                 sha1 = hashlib.sha1(pw.encode("utf-8")).hexdigest().upper()
                 prefix, suffix = sha1[:5], sha1[5:]
-                conn = http.client.HTTPSConnection("api.pwnedpasswords.com")
-                conn._http_vsn = 10
-                conn._http_vsn_str = "HTTP/1.0"
-                conn.request("GET", f"/range/{prefix}",
-                             headers={"User-Agent": f"PasswordVault/{APP_VERSION}"})
-                resp = conn.getresponse()
+                req = urllib.request.Request(
+                    f"https://api.pwnedpasswords.com/range/{prefix}",
+                    headers={"User-Agent": f"PasswordVault/{APP_VERSION}",
+                             "Add-Padding": "true"})
                 found = 0
-                if resp.status == 200:
+                with urllib.request.urlopen(req, timeout=10) as resp:
                     body = resp.read().decode("utf-8")
                     for line in body.splitlines():
-                        h, count = line.strip().split(":")
+                        line = line.strip()
+                        if not line or ":" not in line:
+                            continue
+                        h, count = line.split(":", 1)
                         if h == suffix:
-                            found = int(count)
+                            try:
+                                found = int(count)
+                            except ValueError:
+                                found = 0
                             break
-                else:
-                    resp.read()
-                    found = -1
-                conn.close()
                 results[eid] = found
-            except (OSError, http.client.HTTPException, ValueError) as exc:
+            except (OSError, urllib.error.URLError, ValueError) as exc:
                 log.warning("HIBP check failed for entry %s: %s", eid,
                             exc, exc_info=True)
                 results[eid] = -1

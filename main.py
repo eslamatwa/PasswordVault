@@ -13,18 +13,17 @@ import tkinter as tk
 
 from tkinter import filedialog as tkfiledialog
 import csv
-import ctypes
 import datetime
 import hashlib
 import hmac
 import logging
 import os
-
 import re
 import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import uuid
 import webbrowser
 
@@ -59,7 +58,7 @@ from password_vault.export_import import (
     HAS_OPENPYXL, export_csv, export_excel, import_csv, import_excel,
 )
 from password_vault.ui.widgets import (
-    tip, ios_group, ios_field, ios_combo, make_search_bar,
+    tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
 )
 from password_vault.ui.mini_vault import MiniVault
 from password_vault.ui.floating import FloatingWidget
@@ -81,11 +80,13 @@ class PasswordVault:
         self.current_category = "All"
 
         self._login_attempts = 0
+        self._failed_streak = 0  # cumulative; doesn't reset on each lockout
         self._lockout_until = 0
         self._idle_timer = None
         self._main_frame = None
         self._clipboard_timer = None
         self._search_bar = None
+        self._search_after_id = None
 
         self.settings = load_settings()
         ctk.set_appearance_mode("dark")
@@ -120,45 +121,49 @@ class PasswordVault:
         """Set up Ctrl+C/V/X/A (work with ANY keyboard language) and
         right-click context menu on every Entry / Text widget."""
 
-        # ── Windows virtual-key codes (physical key, layout-independent) ──
-        _KC = {"c": 67, "v": 86, "x": 88, "a": 65}
+        # ── Layout-independent Ctrl+C/V/X/A via Windows virtual-key codes ──
+        # Virtual-key codes match the physical key regardless of keyboard
+        # language (Arabic, Russian, etc.). This handler is Windows-specific:
+        # other platforms get the standard Tk bindings, which already work
+        # for Latin layouts.
+        if sys.platform == "win32":
+            _KC = {"c": 67, "v": 86, "x": 88, "a": 65}
+            _LATIN = {"c": "c", "v": "v", "x": "x", "a": "a"}
 
-        _LATIN = {"c": "c", "v": "v", "x": "x", "a": "a"}
+            def _on_key(event):
+                if not (event.state & 0x4):
+                    return
+                w = event.widget
+                if not isinstance(w, (tk.Entry, tk.Text)):
+                    return
+                kc = event.keycode
+                ks = event.keysym.lower()
+                if kc == _KC["v"]:
+                    if ks == _LATIN["v"]:
+                        return
+                    w.event_generate("<<Paste>>")
+                    return "break"
+                if kc == _KC["c"]:
+                    if ks == _LATIN["c"]:
+                        return
+                    w.event_generate("<<Copy>>")
+                    return "break"
+                if kc == _KC["x"]:
+                    if ks == _LATIN["x"]:
+                        return
+                    w.event_generate("<<Cut>>")
+                    return "break"
+                if kc == _KC["a"]:
+                    if ks == _LATIN["a"]:
+                        return
+                    if isinstance(w, tk.Entry):
+                        w.select_range(0, tk.END)
+                        w.icursor(tk.END)
+                    else:
+                        w.tag_add("sel", "1.0", "end")
+                    return "break"
 
-        def _on_key(event):
-            if not (event.state & 0x4):
-                return
-            w = event.widget
-            if not isinstance(w, (tk.Entry, tk.Text)):
-                return
-            kc = event.keycode
-            ks = event.keysym.lower()
-            if kc == _KC["v"]:
-                if ks == _LATIN["v"]:
-                    return
-                w.event_generate("<<Paste>>")
-                return "break"
-            if kc == _KC["c"]:
-                if ks == _LATIN["c"]:
-                    return
-                w.event_generate("<<Copy>>")
-                return "break"
-            if kc == _KC["x"]:
-                if ks == _LATIN["x"]:
-                    return
-                w.event_generate("<<Cut>>")
-                return "break"
-            if kc == _KC["a"]:
-                if ks == _LATIN["a"]:
-                    return
-                if isinstance(w, tk.Entry):
-                    w.select_range(0, tk.END)
-                    w.icursor(tk.END)
-                else:
-                    w.tag_add("sel", "1.0", "end")
-                return "break"
-
-        self.root.bind_all("<Key>", _on_key, add="+")
+            self.root.bind_all("<Key>", _on_key, add="+")
 
         # ── Right-click context menu ──────────────────────────
         def _ctx_menu(event):
@@ -247,36 +252,11 @@ class PasswordVault:
             self._idle_timer = self.root.after(
                 mins * 60 * 1000, self._auto_lock)
 
-    @staticmethod
-    def _secure_wipe(obj):
-        """Best-effort wipe of sensitive data from memory."""
-        if isinstance(obj, (bytes, bytearray)):
-            try:
-                ctypes.memset(ctypes.addressof(
-                    ctypes.c_char.from_buffer(bytearray(obj))), 0, len(obj))
-            except (TypeError, ValueError):
-                pass
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                if isinstance(v, str):
-                    # Can't truly zero Python str, but replace reference
-                    pass
-                elif isinstance(v, list):
-                    for item in v:
-                        if isinstance(item, dict):
-                            for k2 in ("password", "username"):
-                                if k2 in item:
-                                    item[k2] = "\x00" * len(item.get(k2, ""))
-                    v.clear()
-            obj.clear()
-
     def _auto_lock(self):
         log.info("Vault auto-locked due to inactivity.")
-        # Best-effort wipe sensitive data before releasing references
-        if self.key:
-            self._secure_wipe(self.key)
-        if self.data:
-            self._secure_wipe(self.data)
+        # Python strings are immutable; GC may retain copies of sensitive
+        # data after refs drop. There's no portable way to securely wipe
+        # them. Just release references and let the GC reclaim.
         self.key = None
         self.data = None
         self._idle_timer = None
@@ -416,14 +396,17 @@ class PasswordVault:
         self.strength_label.configure(text=lbl, text_color=c)
 
     def _validate_master_password(self, pw):
-        if len(pw) < 8:
-            return "⚠️ Too short (min 8 chars)"
+        if len(pw) < 12:
+            return "⚠️ Too short (min 12 chars for master password)"
         if not any(c.isupper() for c in pw):
             return "⚠️ Need at least one uppercase letter"
         if not any(c.islower() for c in pw):
             return "⚠️ Need at least one lowercase letter"
         if not any(c.isdigit() for c in pw):
             return "⚠️ Need at least one digit"
+        score, _, _ = password_strength(pw)
+        if score < 3:
+            return "⚠️ Master password is not strong enough"
         return None
 
     def unlock(self):
@@ -466,22 +449,29 @@ class PasswordVault:
 
         except InvalidToken:
             self._login_attempts += 1
-            log.warning("Failed login attempt #%d.", self._login_attempts)
+            self._failed_streak += 1
+            log.warning("Failed login attempt #%d (streak %d).",
+                        self._login_attempts, self._failed_streak)
             rem = max_att - self._login_attempts
             if self._login_attempts >= max_att:
-                self._lockout_until = time.time() + lock_sec
-                log.warning("Account locked out for %ds after %d failed attempts.",
-                            lock_sec, max_att)
+                # Exponential backoff per cumulative streak.
+                # streak 5 → 1x, 10 → 2x, 15 → 4x, 20 → 8x (capped at 30 min)
+                tier = max(0, (self._failed_streak // max_att) - 1)
+                penalty = lock_sec * (2 ** min(tier, 6))
+                penalty = min(penalty, 1800)
+                self._lockout_until = time.time() + penalty
+                log.warning("Account locked out for %ds (streak %d).",
+                            penalty, self._failed_streak)
                 self.error_label.configure(
-                    text=f"⚠️ Locked for {lock_sec}s")
-                self._login_attempts = 0
+                    text=f"⚠️ Locked for {penalty}s")
+                self._login_attempts = 0  # reset window, keep streak
             else:
                 self.error_label.configure(
                     text=f"⚠️ Wrong password ({rem} attempts left)")
             return
 
-
         self._login_attempts = 0
+        self._failed_streak = 0  # success — reset escalation
         log.info("Vault unlocked successfully%s.",
                  " (new vault created)" if is_new else "")
         if is_new:
@@ -515,7 +505,7 @@ class PasswordVault:
         self.search_var = ctk.StringVar()
 
         self.search_var.trace_add("write",
-                                   lambda *_: self.refresh_entries())
+                                   lambda *_: self._debounced_refresh())
 
         self._search_bar = make_search_bar(
             top, self.search_var,
@@ -594,6 +584,15 @@ class PasswordVault:
         self.current_category = cat
         self.refresh_categories()
         self.refresh_entries()
+
+    def _debounced_refresh(self):
+        """Debounce search-triggered refreshes — 300ms idle then refresh."""
+        if self._search_after_id:
+            try:
+                self.root.after_cancel(self._search_after_id)
+            except tk.TclError:
+                pass
+        self._search_after_id = self.root.after(300, self.refresh_entries)
 
     # ─── Keyboard Shortcuts ──────────────────────────────────
     def _bind_shortcuts(self):
@@ -1355,13 +1354,6 @@ class PasswordVault:
             pass
         self._clipboard_timer = None
 
-    @staticmethod
-    def _safe_cfg(btn, t, fg):
-        try:
-            btn.configure(text=t, fg_color=fg)
-        except (tk.TclError, ValueError):
-            pass
-
     # ─── Right-Click Context Menu ─────────────────────────────
     def _show_context_menu(self, event, entry, parent=None):
         """Show a right-click context menu for a password entry card."""
@@ -1441,39 +1433,34 @@ class PasswordVault:
     @staticmethod
     def _extract_host(url, entry):
         """Extract hostname/IP from URL or entry fields for SSH/RDP."""
-        # Try from URL first
         if url:
-            host = url
-            # Remove protocol prefix
-            for prefix in ("ssh://", "rdp://", "https://", "http://",
-                           "ftp://", "sftp://"):
-                if host.lower().startswith(prefix):
-                    host = host[len(prefix):]
-                    break
-            # Remove path, port, query
-            host = host.split("/")[0].split("?")[0].split("#")[0]
-            # Remove user@ prefix if present
-            if "@" in host:
-                host = host.split("@")[-1]
-            # Remove port
-            if ":" in host:
-                host = host.split(":")[0]
+            raw = url.strip()
+            # urlsplit needs a scheme to populate hostname; add a fake one if missing
+            if "://" not in raw:
+                raw = "ssh://" + raw
+            try:
+                parts = urllib.parse.urlsplit(raw)
+                host = parts.hostname or ""
+            except ValueError:
+                host = ""
             if host:
                 return host
         # Try from title (some people put IP/hostname in title)
-        title = entry.get("title", "")
-        ip_pattern = re.compile(
-            r'^(\d{1,3}\.){3}\d{1,3}$')
-        if ip_pattern.match(title.strip()):
-            return title.strip()
+        title = entry.get("title", "").strip()
+        ip_pattern = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')
+        if ip_pattern.match(title):
+            return title
         return ""
 
     def _open_url_with_creds(self, url, username, password):
-        """Open URL in browser and copy username to clipboard."""
+        """Open URL in browser, copy username to clipboard.
+
+        Password is NOT auto-copied — clipboard hijacking is dangerous and
+        can silently overwrite content the user copied in the meantime.
+        Use the 'Copy Password' menu/button when ready instead.
+        """
         self._copy_to_clipboard(username)
         webbrowser.open(url)
-        # After 3 seconds, auto-copy password to clipboard
-        self.root.after(3000, lambda: self._copy_to_clipboard(password))
 
     # ─── Detect available SSH/RDP clients ────────────────────
     @staticmethod
@@ -1641,8 +1628,9 @@ class PasswordVault:
                 err.configure(text="⚠️ SSH client not found")
                 return
 
-            # Copy password to clipboard
-            self._copy_to_clipboard(entry.get("password", ""))
+            # Stage password briefly (10s) so user can paste, then auto-clear
+            self._copy_to_clipboard(entry.get("password", ""),
+                                     force_clear_seconds=10)
 
             dlg.destroy()
 
@@ -1672,21 +1660,14 @@ class PasswordVault:
         """Extract port number from URL string."""
         if not url:
             return default
-        raw = url
-        for prefix in ("ssh://", "rdp://", "https://", "http://",
-                        "ftp://", "sftp://"):
-            if raw.lower().startswith(prefix):
-                raw = raw[len(prefix):]
-                break
-        if "@" in raw:
-            raw = raw.split("@")[-1]
-        host_port = raw.split("/")[0]
-        if ":" in host_port:
-            try:
-                return int(host_port.split(":")[-1])
-            except ValueError:
-                pass
-        return default
+        raw = url.strip()
+        if "://" not in raw:
+            raw = "ssh://" + raw
+        try:
+            parts = urllib.parse.urlsplit(raw)
+            return parts.port or default
+        except ValueError:
+            return default
 
     @staticmethod
     def _sanitize_shell_arg(value: str) -> str:
@@ -1827,8 +1808,9 @@ class PasswordVault:
                 err.configure(text="⚠️ Invalid port number")
                 return
 
-            # Copy password to clipboard
-            self._copy_to_clipboard(entry.get("password", ""))
+            # Stage password briefly (10s) so user can paste, then auto-clear
+            self._copy_to_clipboard(entry.get("password", ""),
+                                     force_clear_seconds=10)
 
             dlg.destroy()
 
@@ -2905,10 +2887,13 @@ class PasswordVault:
         self._center(dlg, w, h)
         return dlg
 
-    def _copy_to_clipboard(self, text: str, btn=None) -> None:
+    def _copy_to_clipboard(self, text: str, btn=None,
+                            force_clear_seconds: int | None = None) -> None:
         """Copy *text* to clipboard with auto-clear scheduling.
 
         If *btn* is provided, flash a '✅ Done!' confirmation on it.
+        If *force_clear_seconds* is set, override the user setting (used by
+        SSH/RDP flows that briefly stage the password for paste).
         """
         pyperclip.copy(text)
         if btn:
@@ -2916,8 +2901,10 @@ class PasswordVault:
             orig_fg = btn.cget("fg_color")
             btn.configure(text="✅ Done!", fg_color=GREEN)
             self.root.after(
-                1000, lambda: self._safe_cfg(btn, orig, orig_fg))
-        clear_sec = self.settings.get("clipboard_clear_seconds", 30)
+                1000, lambda: safe_cfg(btn, orig, orig_fg))
+        clear_sec = (force_clear_seconds
+                     if force_clear_seconds is not None
+                     else self.settings.get("clipboard_clear_seconds", 30))
         if clear_sec > 0:
             if self._clipboard_timer:
                 self.root.after_cancel(self._clipboard_timer)

@@ -83,6 +83,14 @@ def tip(widget, text: str) -> Tooltip:
     return Tooltip(widget, text)
 
 
+def safe_cfg(btn, text: str, fg_color) -> None:
+    """Configure *btn* text + fg_color, swallowing TclError if destroyed."""
+    try:
+        btn.configure(text=text, fg_color=fg_color)
+    except (tk.TclError, ValueError):
+        pass
+
+
 # ─── iOS Group / Field Helpers ───────────────────────────────
 def ios_group(parent, title: str | None = None, compact: bool = False):
     wrapper = ctk.CTkFrame(parent, fg_color="transparent")

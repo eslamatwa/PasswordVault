@@ -42,11 +42,18 @@ def _restrict_file(path: str) -> None:
     """Set restrictive permissions on *path* (owner read/write only)."""
     try:
         if sys.platform == "win32":
-            # On Windows: remove inherited ACLs, keep owner only
+            # On Windows: remove inherited ACLs, keep owner only.
+            # If USERNAME is missing for any reason, skip the icacls call —
+            # an empty user spec would not grant anyone access (icacls would
+            # fail), but explicit guard avoids any unexpected behavior.
+            user = os.environ.get("USERNAME", "")
+            if not user:
+                log.warning("USERNAME env var missing; skipping ACL restrict.")
+                return
             import subprocess as _sp
             _sp.run(
                 ["icacls", path, "/inheritance:r",
-                 "/grant:r", f"{os.environ.get('USERNAME', '')}:F"],
+                 "/grant:r", f"{user}:F"],
                 creationflags=0x08000000,  # CREATE_NO_WINDOW
                 check=False, capture_output=True,
             )
@@ -115,36 +122,49 @@ def load_data(key: bytes) -> dict:
                 "entries": [], "trash": []}
     with open(DATA_FILE, "rb") as f:
         data = decrypt_data(f.read(), key)
-    changed = False
+    schema_changed = False  # only true for structural upgrades, not trash GC
     now_iso = datetime.datetime.now().isoformat()
     for entry in data.get("entries", []):
         if "id" not in entry:
             entry["id"] = str(uuid.uuid4())
-            changed = True
+            schema_changed = True
         if "created_at" not in entry:
             entry["created_at"] = now_iso
-            changed = True
+            schema_changed = True
         if "modified_at" not in entry:
             entry["modified_at"] = now_iso
-            changed = True
+            schema_changed = True
         if "url" not in entry:
             entry["url"] = ""
-            changed = True
+            schema_changed = True
         if "pinned" not in entry:
             entry["pinned"] = False
-            changed = True
+            schema_changed = True
     if "trash" not in data:
         data["trash"] = []
-        changed = True
+        schema_changed = True
+
+    # Take a one-time backup before the first schema migration overwrites
+    # the original ciphertext.
+    if schema_changed:
+        backup_path = DATA_FILE + ".pre-migration.bak"
+        if not os.path.exists(backup_path):
+            try:
+                shutil.copy2(DATA_FILE, backup_path)
+                _restrict_file(backup_path)
+                log.info("Pre-migration backup created at %s.", backup_path)
+            except OSError as exc:
+                log.warning("Pre-migration backup failed: %s", exc)
+
     # Auto-clean trash older than TRASH_DAYS
     cutoff = (datetime.datetime.now()
               - datetime.timedelta(days=TRASH_DAYS)).isoformat()
     before = len(data["trash"])
     data["trash"] = [t for t in data["trash"]
                      if t.get("deleted_at", "") > cutoff]
-    if len(data["trash"]) != before:
-        changed = True
-    if changed:
+    trash_changed = len(data["trash"]) != before
+
+    if schema_changed or trash_changed:
         save_data(data, key)
     return data
 
