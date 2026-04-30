@@ -190,3 +190,107 @@ def load_data(key: bytes) -> dict:
         save_data(data, key)
     return data
 
+
+# ─── Encrypted Backup ────────────────────────────────────────
+# Self-contained backup file format (JSON, UTF-8). The backup carries
+# its own salt — it is independent of vault.salt — so that the user
+# can restore on any machine. KDF parameters are recorded inline so
+# future PBKDF2 iteration bumps don't break old backups.
+#
+# {
+#   "format": "PasswordVault-Backup",
+#   "version": 1,
+#   "kdf": "pbkdf2-sha256",
+#   "iterations": 480000,
+#   "salt": "<base64>",
+#   "ciphertext": "<base64 fernet token>"
+# }
+
+BACKUP_FORMAT = "PasswordVault-Backup"
+BACKUP_VERSION = 1
+
+
+def export_encrypted_backup(data: dict, backup_password: str,
+                              filepath: str) -> None:
+    """Encrypt *data* with a key derived from *backup_password* and write
+    a portable JSON backup file at *filepath*.
+
+    The backup uses a fresh salt and is fully self-describing, so the
+    user can restore on a clean machine with only the backup file and
+    the backup password.
+    """
+    if not backup_password:
+        raise ValueError("Backup password is required.")
+
+    salt = os.urandom(32)
+    iterations = 480000
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
+                      salt=salt, iterations=iterations)
+    key = base64.urlsafe_b64encode(kdf.derive(backup_password.encode()))
+    token = Fernet(key).encrypt(
+        json.dumps(data, ensure_ascii=False).encode())
+
+    payload = {
+        "format": BACKUP_FORMAT,
+        "version": BACKUP_VERSION,
+        "kdf": "pbkdf2-sha256",
+        "iterations": iterations,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "ciphertext": token.decode("ascii"),
+    }
+    tmp = filepath + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, filepath)
+        log.info("Encrypted backup written to %s.", filepath)
+    except (OSError, ValueError) as exc:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        log.error("Failed to write encrypted backup: %s", exc, exc_info=True)
+        raise
+
+
+def import_encrypted_backup(filepath: str,
+                              backup_password: str) -> dict:
+    """Read and decrypt a backup file produced by export_encrypted_backup.
+
+    Raises:
+        ValueError if the file is not a recognized backup or the
+        password is wrong.
+    """
+    with open(filepath, "r", encoding="utf-8") as f:
+        try:
+            payload = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Not a valid backup file.") from exc
+
+    if payload.get("format") != BACKUP_FORMAT:
+        raise ValueError("Not a Password Vault backup file.")
+    version = payload.get("version")
+    if version != BACKUP_VERSION:
+        raise ValueError(f"Unsupported backup version: {version}")
+    if payload.get("kdf") != "pbkdf2-sha256":
+        raise ValueError(f"Unsupported KDF: {payload.get('kdf')}")
+
+    try:
+        salt = base64.b64decode(payload["salt"])
+        token = payload["ciphertext"].encode("ascii")
+        iterations = int(payload["iterations"])
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ValueError("Backup file is malformed.") from exc
+
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
+                      salt=salt, iterations=iterations)
+    key = base64.urlsafe_b64encode(kdf.derive(backup_password.encode()))
+    try:
+        plaintext = Fernet(key).decrypt(token)
+    except Exception as exc:
+        # Wrong password OR tampered ciphertext — same opaque error
+        # so we don't leak which.
+        raise ValueError("Wrong password or corrupted backup.") from exc
+    return json.loads(plaintext.decode())
+

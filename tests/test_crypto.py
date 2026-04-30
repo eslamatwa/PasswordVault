@@ -135,6 +135,72 @@ class GeneratePasswordTests(unittest.TestCase):
         self.assertEqual(len(pw), 10)
 
 
+@unittest.skipUnless(_HAS_CRYPTO, "cryptography library not available")
+class EncryptedBackupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_roundtrip(self):
+        from password_vault.crypto import (
+            export_encrypted_backup, import_encrypted_backup,
+        )
+        data = {"entries": [{"title": "x", "password": "p"}],
+                "categories": ["A"], "trash": []}
+        path = os.path.join(self.tmp, "vault-backup.pvbak")
+        export_encrypted_backup(data, "correcthorse", path)
+        out = import_encrypted_backup(path, "correcthorse")
+        self.assertEqual(out, data)
+
+    def test_wrong_password_fails(self):
+        from password_vault.crypto import (
+            export_encrypted_backup, import_encrypted_backup,
+        )
+        data = {"entries": [], "categories": [], "trash": []}
+        path = os.path.join(self.tmp, "vault-backup.pvbak")
+        export_encrypted_backup(data, "right", path)
+        with self.assertRaises(ValueError):
+            import_encrypted_backup(path, "wrong")
+
+    def test_backup_carries_own_salt(self):
+        """Two backups of the same data with the same password should
+        differ — fresh salt each time."""
+        from password_vault.crypto import export_encrypted_backup
+        data = {"entries": [], "categories": [], "trash": []}
+        a = os.path.join(self.tmp, "a.pvbak")
+        b = os.path.join(self.tmp, "b.pvbak")
+        export_encrypted_backup(data, "pw", a)
+        export_encrypted_backup(data, "pw", b)
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            self.assertNotEqual(fa.read(), fb.read())
+
+    def test_malformed_file_rejected(self):
+        from password_vault.crypto import import_encrypted_backup
+        path = os.path.join(self.tmp, "junk.pvbak")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not json")
+        with self.assertRaises(ValueError):
+            import_encrypted_backup(path, "pw")
+
+    def test_wrong_format_rejected(self):
+        import json
+        from password_vault.crypto import import_encrypted_backup
+        path = os.path.join(self.tmp, "wrong.pvbak")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"format": "Other-App", "version": 1}, f)
+        with self.assertRaises(ValueError):
+            import_encrypted_backup(path, "pw")
+
+    def test_empty_password_rejected_on_export(self):
+        from password_vault.crypto import export_encrypted_backup
+        path = os.path.join(self.tmp, "x.pvbak")
+        with self.assertRaises(ValueError):
+            export_encrypted_backup({"entries": []}, "", path)
+
+
 class HostExtractTests(unittest.TestCase):
     def test_url_parsing_handles_user_at_host(self):
         # Functional smoke: ssh://user@host:2222/path → host

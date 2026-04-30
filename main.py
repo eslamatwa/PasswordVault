@@ -378,7 +378,40 @@ class PasswordVault:
             "Decrypt and open your vault" if not is_new
             else "Create a new encrypted vault")
 
+        # Subtle "Restore from backup" link — useful both on first-run
+        # (you have a backup from another machine) and when the user
+        # forgot their master password.
+        restore_btn = ctk.CTkButton(
+            self.login_frame, text="🛟  Restore from backup",
+            width=220, height=28,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color="transparent", hover_color=BG_SEC,
+            corner_radius=10, text_color=TEXT_SEC,
+            command=self._show_login_restore_dialog)
+        restore_btn.pack(pady=(8, 0))
+        tip(restore_btn,
+            "Restore vault contents from an encrypted backup file")
+
         self.master_entry.focus()
+
+    def _show_login_restore_dialog(self):
+        """Open the login-time restore flow (no current vault required)."""
+        from password_vault.ui.dialogs import backup
+        backup.show_restore_at_login(self)
+
+    def _finish_unlock_after_restore(self):
+        """Called by the login-restore flow after data is written and the
+        new master key is set. Tear down the login screen and bring up
+        the main UI."""
+        self._login_attempts = 0
+        self._failed_streak = 0
+        try:
+            self.login_frame.destroy()
+        except (AttributeError, tk.TclError):
+            pass
+        self.build_ui()
+        self._start_idle_timer()
+        self._bind_shortcuts()
 
 
     def _update_login_strength(self, event=None):
@@ -629,6 +662,12 @@ class PasswordVault:
                           command=self.show_export_dialog)
         menu.add_command(label="📥  Import Data  (Ctrl+I)",
                           command=self.show_import_dialog)
+        menu.add_separator()
+        menu.add_command(label="🛟  Encrypted Backup …",
+                          command=self.show_backup_export_dialog)
+        menu.add_command(label="♻️  Restore From Backup …",
+                          command=self.show_backup_restore_dialog)
+        menu.add_separator()
         trash_n = len(self.data.get("trash", []))
         menu.add_command(
             label=f"🗑️  Recycle Bin ({trash_n})",
@@ -1931,6 +1970,15 @@ class PasswordVault:
     def show_trash_dialog(self):
         from password_vault.ui.dialogs import trash
         trash.show(self)
+
+    # ─── Encrypted Backup Dialogs ────────────────────────────
+    def show_backup_export_dialog(self):
+        from password_vault.ui.dialogs import backup
+        backup.show_export(self)
+
+    def show_backup_restore_dialog(self):
+        from password_vault.ui.dialogs import backup
+        backup.show_restore(self)
 
     # ─── Security Dashboard ──────────────────────────────────
     def show_security_dashboard(self):
