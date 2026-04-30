@@ -1531,13 +1531,28 @@ class PasswordVault:
 
         return clients
 
-    # ─── SSH Connection Dialog ─────────────────────────────
+    # ─── SSH / RDP Connection Dialog ───────────────────────
     def _show_ssh_dialog(self, entry):
-        """Show a dialog to configure and start an SSH session."""
-        dlg = self._make_dialog("SSH Session", 420, 480)
+        self._show_remote_session_dialog(entry, kind="ssh")
+
+    def _show_rdp_dialog(self, entry):
+        self._show_remote_session_dialog(entry, kind="rdp")
+
+    def _show_remote_session_dialog(self, entry, *, kind: str):
+        """Unified dialog for SSH / RDP session setup."""
+        is_ssh = kind == "ssh"
+        title = "SSH Session" if is_ssh else "RDP Session"
+        header = "🖥️  SSH Session" if is_ssh else "🖥️  Remote Desktop (RDP)"
+        default_port = 22 if is_ssh else 3389
+        height = 480 if is_ssh else 400
+        btn_color = GREEN if is_ssh else ACCENT
+        btn_hover = GREEN_HOVER if is_ssh else ACCENT_HOVER
+        btn_text_color = BG if is_ssh else "white"
+
+        dlg = self._make_dialog(title, 420, height)
 
         ctk.CTkLabel(
-            dlg, text="🖥️  SSH Session",
+            dlg, text=header,
             font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
             text_color=TEXT_PRI).pack(pady=(12, 2))
         ctk.CTkLabel(
@@ -1563,99 +1578,103 @@ class PasswordVault:
         if pre_host:
             host_e.insert(0, pre_host)
 
-        # Username
-        ctk.CTkLabel(form, text="Username",
-                      font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(
-            fill="x", pady=(2, 1))
-        user_e = ctk.CTkEntry(
-            form, height=34, font=ctk.CTkFont(size=12),
-            fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            text_color=TEXT_PRI, placeholder_text="username")
-        user_e.pack(fill="x", pady=(0, 6))
-        user_e.insert(0, entry.get("username", ""))
+        # Username (SSH only)
+        user_e = None
+        if is_ssh:
+            ctk.CTkLabel(form, text="Username",
+                          font=ctk.CTkFont(family="Segoe UI", size=12),
+                          text_color=TEXT_PRI, anchor="w").pack(
+                fill="x", pady=(2, 1))
+            user_e = ctk.CTkEntry(
+                form, height=34, font=ctk.CTkFont(size=12),
+                fg_color=INPUT_BG, border_width=0, corner_radius=8,
+                text_color=TEXT_PRI, placeholder_text="username")
+            user_e.pack(fill="x", pady=(0, 6))
+            user_e.insert(0, entry.get("username", ""))
 
         # Port
         port_row = ctk.CTkFrame(form, fg_color="transparent")
         port_row.pack(fill="x", pady=(2, 6))
         ctk.CTkLabel(port_row, text="Port",
                       font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(
-            side="left")
+                      text_color=TEXT_PRI, anchor="w").pack(side="left")
         port_e = ctk.CTkEntry(
             port_row, width=80, height=34, font=ctk.CTkFont(size=12),
             fg_color=INPUT_BG, border_width=0, corner_radius=8,
             text_color=TEXT_PRI)
         port_e.pack(side="left", padx=(10, 0))
-        # Pre-fill port from URL
-        pre_port = self._extract_port(entry.get("url", ""), 22)
-        port_e.insert(0, str(pre_port))
+        port_e.insert(0, str(self._extract_port(
+            entry.get("url", ""), default_port)))
 
-        # SSH Client selector
-        clients = self._detect_ssh_clients()
-        client_names = [c[0] for c in clients] if clients else ["No SSH client found"]
-        ctk.CTkLabel(form, text="SSH Client",
-                      font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(
-            fill="x", pady=(2, 1))
-        client_var = ctk.StringVar(value=client_names[0])
-        client_cb = ctk.CTkComboBox(
-            form, values=client_names, variable=client_var,
-            height=34, font=ctk.CTkFont(size=12),
-            fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            button_color=ACCENT, button_hover_color=ACCENT_HOVER,
-            dropdown_fg_color=BG_SEC, dropdown_hover_color=ACCENT,
-            text_color=TEXT_PRI, state="readonly")
-        client_cb.pack(fill="x", pady=(0, 8))
+        # SSH Client selector (SSH only)
+        clients = self._detect_ssh_clients() if is_ssh else []
+        client_var = None
+        if is_ssh:
+            client_names = ([c[0] for c in clients] if clients
+                            else ["No SSH client found"])
+            ctk.CTkLabel(form, text="SSH Client",
+                          font=ctk.CTkFont(family="Segoe UI", size=12),
+                          text_color=TEXT_PRI, anchor="w").pack(
+                fill="x", pady=(2, 1))
+            client_var = ctk.StringVar(value=client_names[0])
+            client_cb = ctk.CTkComboBox(
+                form, values=client_names, variable=client_var,
+                height=34, font=ctk.CTkFont(size=12),
+                fg_color=INPUT_BG, border_width=0, corner_radius=8,
+                button_color=ACCENT, button_hover_color=ACCENT_HOVER,
+                dropdown_fg_color=BG_SEC, dropdown_hover_color=ACCENT,
+                text_color=TEXT_PRI, state="readonly")
+            client_cb.pack(fill="x", pady=(0, 8))
 
         # Error label
         err = ctk.CTkLabel(form, text="", text_color=RED,
                             font=ctk.CTkFont(size=10), height=14)
         err.pack(fill="x", pady=(0, 2))
 
-        # Info label
-        info_lbl = ctk.CTkLabel(
+        ctk.CTkLabel(
             form, text="💡 Password will be copied to clipboard",
-            font=ctk.CTkFont(size=9), text_color=TEXT_TERT)
-        info_lbl.pack(fill="x")
+            font=ctk.CTkFont(size=9), text_color=TEXT_TERT).pack(fill="x")
 
         def connect():
             host = host_e.get().strip()
-            user = user_e.get().strip()
             port_str = port_e.get().strip()
-
             if not host:
                 err.configure(text="⚠️ Host / IP is required")
                 return
-
             try:
                 port = int(port_str)
             except ValueError:
                 err.configure(text="⚠️ Invalid port number")
                 return
 
-            if not clients:
-                err.configure(text="⚠️ No SSH client found on system")
-                return
-
-            selected = client_var.get()
-            client_path = ""
-            for name, path in clients:
-                if name == selected:
-                    client_path = path
-                    break
-            if not client_path:
-                err.configure(text="⚠️ SSH client not found")
-                return
-
-            # Stage password briefly (10s) so user can paste, then auto-clear
-            self._copy_to_clipboard(entry.get("password", ""),
-                                     force_clear_seconds=10)
-
-            dlg.destroy()
-
-            self._launch_ssh(client_path, selected, host, user,
-                             port, entry.get("title", ""))
+            if is_ssh:
+                user = user_e.get().strip() if user_e else ""
+                if not clients:
+                    err.configure(text="⚠️ No SSH client found on system")
+                    return
+                selected = client_var.get() if client_var else ""
+                client_path = next(
+                    (path for name, path in clients if name == selected),
+                    "")
+                if not client_path:
+                    err.configure(text="⚠️ SSH client not found")
+                    return
+                self._copy_to_clipboard(entry.get("password", ""),
+                                         force_clear_seconds=10)
+                dlg.destroy()
+                self._launch_ssh(client_path, selected, host, user,
+                                 port, entry.get("title", ""))
+            else:
+                self._copy_to_clipboard(entry.get("password", ""),
+                                         force_clear_seconds=10)
+                dlg.destroy()
+                host = self._sanitize_shell_arg(host)
+                try:
+                    rdp_target = (f"{host}:{port}"
+                                  if port != default_port else host)
+                    subprocess.Popen(["mstsc", f"/v:{rdp_target}"])
+                except OSError as exc:
+                    log.warning("Failed to launch RDP: %s", exc)
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 12))
@@ -1667,11 +1686,11 @@ class PasswordVault:
         connect_btn = ctk.CTkButton(
             btn_row, text="🖥️  Connect", height=36,
             font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=GREEN, hover_color=GREEN_HOVER,
-            text_color=BG, corner_radius=8,
-            command=connect)
+            fg_color=btn_color, hover_color=btn_hover,
+            text_color=btn_text_color, corner_radius=8, command=connect)
         connect_btn.pack(side="right", fill="x", expand=True, padx=(8, 0))
-        tip(connect_btn, "Start SSH session (password copied to clipboard)")
+        tip(connect_btn,
+            f"Start {kind.upper()} session (password copied to clipboard)")
         dlg.bind("<Return>", lambda _e: connect())
 
         host_e.focus()
@@ -1746,121 +1765,6 @@ class PasswordVault:
         except OSError as exc:
             log.warning("Failed to launch SSH client %s: %s",
                         client_name, exc)
-
-    # ─── RDP Connection Dialog ─────────────────────────────
-    def _show_rdp_dialog(self, entry):
-        """Show a dialog to configure and start an RDP session."""
-        dlg = self._make_dialog("RDP Session", 420, 400)
-
-        ctk.CTkLabel(
-            dlg, text="🖥️  Remote Desktop (RDP)",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color=TEXT_PRI).pack(pady=(12, 2))
-        ctk.CTkLabel(
-            dlg, text=f"Entry: {entry.get('title', '')}",
-            font=ctk.CTkFont(family="Segoe UI", size=10),
-            text_color=TEXT_SEC).pack(pady=(0, 8))
-
-        form = ctk.CTkFrame(dlg, fg_color="transparent")
-        form.pack(fill="x", padx=20, pady=(0, 6))
-
-        # Host / IP
-        pre_host = self._extract_host(entry.get("url", ""), entry)
-        ctk.CTkLabel(form, text="Host / IP",
-                      font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(
-            fill="x", pady=(4, 1))
-        host_e = ctk.CTkEntry(
-            form, height=34, font=ctk.CTkFont(size=12),
-            fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            text_color=TEXT_PRI,
-            placeholder_text="e.g. 192.168.1.10 or server.example.com")
-        host_e.pack(fill="x", pady=(0, 6))
-        if pre_host:
-            host_e.insert(0, pre_host)
-
-        # Username
-        ctk.CTkLabel(form, text="Username",
-                      font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(
-            fill="x", pady=(2, 1))
-        user_e = ctk.CTkEntry(
-            form, height=34, font=ctk.CTkFont(size=12),
-            fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            text_color=TEXT_PRI, placeholder_text="username")
-        user_e.pack(fill="x", pady=(0, 6))
-        user_e.insert(0, entry.get("username", ""))
-
-
-        # Port
-        port_row = ctk.CTkFrame(form, fg_color="transparent")
-        port_row.pack(fill="x", pady=(2, 6))
-        ctk.CTkLabel(port_row, text="Port",
-                      font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(side="left")
-        port_e = ctk.CTkEntry(
-            port_row, width=80, height=34, font=ctk.CTkFont(size=12),
-            fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            text_color=TEXT_PRI)
-        port_e.pack(side="left", padx=(10, 0))
-        port_e.insert(0, str(self._extract_port(
-            entry.get("url", ""), 3389)))
-
-        # Error label
-        err = ctk.CTkLabel(form, text="", text_color=RED,
-                            font=ctk.CTkFont(size=10), height=14)
-        err.pack(fill="x", pady=(0, 2))
-
-        # Info label
-        ctk.CTkLabel(
-            form, text="💡 Password will be copied to clipboard",
-            font=ctk.CTkFont(size=9), text_color=TEXT_TERT).pack(fill="x")
-
-        def connect():
-            host = host_e.get().strip()
-            port_str = port_e.get().strip()
-
-            if not host:
-                err.configure(text="⚠️ Host / IP is required")
-                return
-            try:
-                port = int(port_str)
-            except ValueError:
-                err.configure(text="⚠️ Invalid port number")
-                return
-
-            # Stage password briefly (10s) so user can paste, then auto-clear
-            self._copy_to_clipboard(entry.get("password", ""),
-                                     force_clear_seconds=10)
-
-            dlg.destroy()
-
-            # Launch RDP — sanitize to prevent injection
-            host = self._sanitize_shell_arg(host)
-            try:
-                rdp_target = f"{host}:{port}" if port != 3389 else host
-                subprocess.Popen(["mstsc", f"/v:{rdp_target}"])
-            except OSError as exc:
-                log.warning("Failed to launch RDP: %s", exc)
-
-        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(0, 12))
-        ctk.CTkButton(
-            btn_row, text="Cancel", width=90, height=36,
-            font=ctk.CTkFont(size=12), fg_color=BG_TERT,
-            hover_color=SEPARATOR, text_color=TEXT_SEC, corner_radius=8,
-            command=dlg.destroy).pack(side="left")
-        connect_btn = ctk.CTkButton(
-            btn_row, text="🖥️  Connect", height=36,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color="white", corner_radius=8,
-            command=connect)
-        connect_btn.pack(side="right", fill="x", expand=True, padx=(8, 0))
-        tip(connect_btn, "Start RDP session (password copied to clipboard)")
-        dlg.bind("<Return>", lambda _e: connect())
-
-        host_e.focus()
 
     # ─── Password Generator Dialog ───────────────────────────
     def _show_generator(self, target_entry):
