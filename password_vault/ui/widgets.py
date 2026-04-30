@@ -105,6 +105,28 @@ def bind_right_click_recursive(widget, callback) -> None:
         pass
 
 
+def add_color_strip(card, color_info: dict, *, width: int = 3,
+                    x: int = 3, y: int = 6, relheight: float = 0.78):
+    """Place a colored side-strip on *card* if the color preset has one.
+
+    Returns True if a strip was placed, False if the color has no strip.
+    """
+    strip = color_info.get("strip")
+    if not strip:
+        return False
+    ctk.CTkFrame(card, width=width, fg_color=strip,
+                  corner_radius=2).place(x=x, y=y, relheight=relheight)
+    return True
+
+
+def sort_entries_pinned_first(entries: list[dict]) -> list[dict]:
+    """Return *entries* sorted with pinned items first, then by title."""
+    return sorted(
+        entries,
+        key=lambda e: (not e.get("pinned", False),
+                        e.get("title", "").lower()))
+
+
 # ─── iOS Group / Field Helpers ───────────────────────────────
 def ios_group(parent, title: str | None = None, compact: bool = False):
     wrapper = ctk.CTkFrame(parent, fg_color="transparent")

@@ -59,7 +59,7 @@ from password_vault.export_import import (
 )
 from password_vault.ui.widgets import (
     tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
-    bind_right_click_recursive,
+    bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
 )
 from password_vault.ui.mini_vault import MiniVault
 from password_vault.ui.floating import FloatingWidget
@@ -1160,9 +1160,7 @@ class PasswordVault:
                        or search in e.get("url", "").lower()
                        or search in e.get("category", "").lower()
                        or search in e.get("notes", "").lower()]
-        # pinned first, then alphabetically
-        entries.sort(key=lambda e: (not e.get("pinned", False),
-                                     e.get("title", "").lower()))
+        entries = sort_entries_pinned_first(entries)
         if not entries:
 
             ef = ctk.CTkFrame(self.entries_panel, fg_color="transparent")
@@ -1192,14 +1190,11 @@ class PasswordVault:
         def _on_right_click(event, e=entry):
             self._show_context_menu(event, e)
 
-        if cc["strip"]:
-            ctk.CTkFrame(card, width=3, fg_color=cc["strip"],
-                          corner_radius=2).place(
-                x=3, y=6, relheight=0.78)
+        has_strip = add_color_strip(card, cc)
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
 
-        inner.pack(fill="x", padx=(14 if cc["strip"] else 12), pady=6)
+        inner.pack(fill="x", padx=(14 if has_strip else 12), pady=6)
 
 
         # Row 1: Pin + Title + Category badge + Age + Edit + Delete

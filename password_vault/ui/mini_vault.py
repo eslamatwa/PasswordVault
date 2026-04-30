@@ -17,6 +17,7 @@ from ..theme import (
 from ..security import password_age_text
 from .widgets import (
     make_search_bar, tip, safe_cfg, bind_right_click_recursive,
+    add_color_strip, sort_entries_pinned_first,
 )
 
 
@@ -121,8 +122,7 @@ class MiniVault(ctk.CTkToplevel):
                        or search in e.get("username", "").lower()
                        or search in e.get("url", "").lower()
                        or search in e.get("notes", "").lower()]
-        # pinned first
-        entries.sort(key=lambda e: not e.get("pinned", False))
+        entries = sort_entries_pinned_first(entries)
         if not entries:
             ctk.CTkLabel(self.list_frame, text="No results",
                           font=ctk.CTkFont(size=12),
@@ -213,9 +213,7 @@ class MiniVault(ctk.CTkToplevel):
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="x", padx=10, pady=7)
 
-        if cc["strip"]:
-            ctk.CTkFrame(card, width=4, fg_color=cc["strip"],
-                          corner_radius=2).place(x=3, y=6, relheight=0.7)
+        add_color_strip(card, cc, width=4, relheight=0.7)
 
         # Title row
         title_row = ctk.CTkFrame(inner, fg_color="transparent")
