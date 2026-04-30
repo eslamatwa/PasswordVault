@@ -78,6 +78,28 @@ def get_or_create_salt() -> bytes:
     return salt
 
 
+def rotate_salt(salt: bytes | None = None) -> bytes:
+    """Atomically replace the salt file.
+
+    If *salt* is None, generate a new 32-byte salt. Otherwise persist the
+    given salt (caller is responsible for using a CSPRNG).
+
+    Used when the master password changes — re-deriving the key with a
+    fresh salt prevents an attacker who captured the old vault file from
+    accelerating attacks against the new password using precomputed
+    PBKDF2 work bound to the old salt.
+    """
+    if salt is None:
+        salt = os.urandom(32)
+    tmp = SALT_FILE + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(salt)
+    os.replace(tmp, SALT_FILE)
+    _restrict_file(SALT_FILE)
+    log.info("Salt rotated (new %d bytes).", len(salt))
+    return salt
+
+
 # ─── Key Derivation ──────────────────────────────────────────
 def derive_key(password: str, salt: bytes) -> bytes:
     """Derive a Fernet-compatible key from *password* + *salt*."""

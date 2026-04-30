@@ -163,14 +163,18 @@ class MiniVault(ctk.CTkToplevel):
         else:
             menu.add_command(label="🌐  Open URL in Browser",
                              state="disabled")
-        menu.add_separator()
 
-        menu.add_command(
-            label="🖥️  SSH Session …",
-            command=lambda: self.app._show_ssh_dialog(entry))
-        menu.add_command(
-            label="🖥️  RDP Session …",
-            command=lambda: self.app._show_rdp_dialog(entry))
+        # SSH / RDP only when the entry looks like a remote host.
+        host = self.app._extract_host(url, entry)
+        cat = entry.get("category", "").lower()
+        if host or cat in ("server", "vpn", "ssh", "rdp"):
+            menu.add_separator()
+            menu.add_command(
+                label="🖥️  SSH Session …",
+                command=lambda: self.app._show_ssh_dialog(entry))
+            menu.add_command(
+                label="🖥️  RDP Session …",
+                command=lambda: self.app._show_rdp_dialog(entry))
         menu.add_separator()
 
         menu.add_command(

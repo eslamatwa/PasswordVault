@@ -48,7 +48,7 @@ from password_vault.settings import (
 )
 from password_vault.crypto import (
     DATA_FILE, APP_DIR,
-    get_or_create_salt, derive_key, save_data, load_data,
+    get_or_create_salt, rotate_salt, derive_key, save_data, load_data,
 )
 from password_vault.security import (
     password_strength, password_age_text, find_duplicate_passwords,
@@ -1014,8 +1014,24 @@ class PasswordVault:
             if ve:
                 err.configure(text=ve)
                 return
-            self.key = derive_key(np_, salt)
-            save_data(self.data, self.key)
+            # Rotate salt + re-derive key + re-encrypt vault. Atomic order:
+            # 1) compute new key with new salt
+            # 2) save vault encrypted with new key (atomic write to .tmp)
+            # 3) only after save succeeds, persist new salt
+            # If step 2 fails, salt is unchanged and old key still works.
+            new_salt = os.urandom(32)
+            new_key = derive_key(np_, new_salt)
+            try:
+                save_data(self.data, new_key)
+            except (OSError, ValueError) as exc:
+                log.error("Re-encrypt during password change failed: %s",
+                          exc, exc_info=True)
+                err.configure(text="⚠️ Could not save — try again")
+                return
+            # Vault is now encrypted with new_key. Persist the salt.
+            rotate_salt(new_salt)
+            self.key = new_key
+            log.info("Master password changed; salt rotated.")
             dlg.destroy()
 
         save_btn = ctk.CTkButton(
@@ -1025,6 +1041,7 @@ class PasswordVault:
             command=save)
         save_btn.pack(fill="x", padx=14)
         tip(save_btn, "Save the new master password")
+        dlg.bind("<Return>", lambda _e: save())
         old_e.focus()
 
     # ─── Categories ──────────────────────────────────────────
@@ -1120,6 +1137,7 @@ class PasswordVault:
             hover_color=CARD_HOVER, width=140, height=36,
             font=ctk.CTkFont(size=13), corner_radius=10,
             command=dlg.destroy).pack(side="right", padx=4)
+        dlg.bind("<Return>", lambda _e: do_del())
 
     # ─── Entries ─────────────────────────────────────────────
     def refresh_entries(self):
@@ -1396,17 +1414,19 @@ class PasswordVault:
                 label="🌐  Open URL in Browser",
                 state="disabled")
 
-        menu.add_separator()
-
-        # ── SSH Session ──
-        menu.add_command(
-            label="🖥️  SSH Session …",
-            command=lambda: self._show_ssh_dialog(entry))
-
-        # ── RDP Session ──
-        menu.add_command(
-            label="🖥️  RDP Session …",
-            command=lambda: self._show_rdp_dialog(entry))
+        # ── SSH / RDP Session ── only show when the entry looks like a
+        # remote host (URL field is set, or category hints at servers).
+        host = self._extract_host(url, entry)
+        cat = entry.get("category", "").lower()
+        looks_remote = bool(host) or cat in ("server", "vpn", "ssh", "rdp")
+        if looks_remote:
+            menu.add_separator()
+            menu.add_command(
+                label="🖥️  SSH Session …",
+                command=lambda: self._show_ssh_dialog(entry))
+            menu.add_command(
+                label="🖥️  RDP Session …",
+                command=lambda: self._show_rdp_dialog(entry))
 
         menu.add_separator()
 
@@ -1652,6 +1672,7 @@ class PasswordVault:
             command=connect)
         connect_btn.pack(side="right", fill="x", expand=True, padx=(8, 0))
         tip(connect_btn, "Start SSH session (password copied to clipboard)")
+        dlg.bind("<Return>", lambda _e: connect())
 
         host_e.focus()
 
@@ -1837,6 +1858,7 @@ class PasswordVault:
             command=connect)
         connect_btn.pack(side="right", fill="x", expand=True, padx=(8, 0))
         tip(connect_btn, "Start RDP session (password copied to clipboard)")
+        dlg.bind("<Return>", lambda _e: connect())
 
         host_e.focus()
 
@@ -2178,6 +2200,7 @@ class PasswordVault:
             command=save)
         save_btn.pack(fill="x")
         tip(save_btn, "Save this password entry")
+        dlg.bind("<Control-Return>", lambda _e: save())
         title_e.focus()
 
     # ─── Delete Confirm (→ Recycle Bin) ──────────────────────
@@ -2230,6 +2253,7 @@ class PasswordVault:
             hover_color=CARD_HOVER, width=140, height=36,
             font=ctk.CTkFont(size=13), corner_radius=10,
             command=dlg.destroy).pack(side="right", padx=4)
+        dlg.bind("<Return>", lambda _e: do_del())
 
     # ─── Add Category ────────────────────────────────────────
     def show_add_cat_dialog(self):
@@ -2537,11 +2561,51 @@ class PasswordVault:
                 refresh_list()
 
             def perm_del(it=item):
-                self.data["trash"] = [
-                    t for t in self.data["trash"]
-                    if t.get("id") != it.get("id")]
-                save_data(self.data, self.key)
-                refresh_list()
+                # Confirm before destroying — Delete Forever is irreversible.
+                confirm = ctk.CTkToplevel(dlg)
+                confirm.title("Delete Forever")
+                confirm.geometry("340x180")
+                confirm.resizable(False, False)
+                confirm.configure(fg_color=BG)
+                confirm.transient(dlg)
+                confirm.grab_set()
+                self._center(confirm, 340, 180)
+                confirm.bind("<Escape>", lambda _e: confirm.destroy())
+
+                ctk.CTkLabel(
+                    confirm, text="⚠️  Delete Forever?",
+                    font=ctk.CTkFont(family="Segoe UI", size=16,
+                                      weight="bold"),
+                    text_color=TEXT_PRI).pack(pady=(18, 4))
+                ctk.CTkLabel(
+                    confirm,
+                    text=f'"{it.get("title", "")}"\n'
+                         f"This cannot be undone.",
+                    font=ctk.CTkFont(size=12),
+                    text_color=TEXT_SEC, justify="center").pack(pady=(0, 14))
+
+                cbf = ctk.CTkFrame(confirm, fg_color="transparent")
+                cbf.pack(fill="x", padx=24)
+
+                def do_perm():
+                    self.data["trash"] = [
+                        t for t in self.data["trash"]
+                        if t.get("id") != it.get("id")]
+                    save_data(self.data, self.key)
+                    confirm.destroy()
+                    refresh_list()
+
+                ctk.CTkButton(
+                    cbf, text="Delete", fg_color=RED,
+                    hover_color=RED_HOVER, width=130, height=34,
+                    font=ctk.CTkFont(size=13), corner_radius=10,
+                    command=do_perm).pack(side="left", padx=4)
+                ctk.CTkButton(
+                    cbf, text="Cancel", fg_color=BG_TERT,
+                    hover_color=CARD_HOVER, width=130, height=34,
+                    font=ctk.CTkFont(size=13), corner_radius=10,
+                    command=confirm.destroy).pack(side="right", padx=4)
+                confirm.bind("<Return>", lambda _e: do_perm())
 
             r_btn = ctk.CTkButton(
                 brow, text="♻️ Restore", height=26,
@@ -2885,6 +2949,9 @@ class PasswordVault:
         dlg.transient(self.root)
         dlg.grab_set()
         self._center(dlg, w, h)
+        # Esc closes the dialog. Individual dialogs may bind <Return> to
+        # their primary action (Save/Connect/Confirm).
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
         return dlg
 
     def _copy_to_clipboard(self, text: str, btn=None,
