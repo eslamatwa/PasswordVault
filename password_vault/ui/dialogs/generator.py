@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import tkinter as tk
+
 import customtkinter as ctk
 
 from ...security import generate_password, password_strength
+from ...settings import save_settings
 from ...theme import (
-    ACCENT, ACCENT_HOVER, BG, BG_SEC, BG_TERT, GREEN, GREEN_HOVER,
-    TEXT_PRI, TEXT_QUAT, TEXT_SEC,
+    ACCENT, ACCENT_HOVER, BG_SEC, BG_TERT, GREEN, GREEN_HOVER,
+    TEXT_ON_GREEN, TEXT_PRI, TEXT_QUAT, TEXT_SEC,
 )
 from ..widgets import tip
+
+# Idle time after the length slider settles before regenerating.
+REGEN_DEBOUNCE_MS = 120
 
 
 def show(app, target_entry) -> None:
@@ -73,10 +79,19 @@ def show(app, target_entry) -> None:
         sb.configure(progress_color=c)
         sl.configure(text=l, text_color=c)
 
+    _regen_timer: list = [None]
+
     def on_len(v):
+        # The slider fires on every step of the drag; the label follows
+        # immediately but regeneration waits for the drag to settle.
         lv.set(int(v))
         ll.configure(text=str(int(v)))
-        regen()
+        if _regen_timer[0]:
+            try:
+                dlg.after_cancel(_regen_timer[0])
+            except (tk.TclError, ValueError):
+                pass
+        _regen_timer[0] = dlg.after(REGEN_DEBOUNCE_MS, regen)
 
     slider = ctk.CTkSlider(
         lf, from_=6, to=40, number_of_steps=34, command=on_len,
@@ -111,15 +126,26 @@ def show(app, target_entry) -> None:
     regen_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
     tip(regen_btn, "Generate a new random password")
 
+    def remember_options():
+        """Persist the picked options so the next open starts here."""
+        chosen = {"gen_length": lv.get(), "gen_upper": bool(uv.get()),
+                  "gen_lower": bool(lov.get()), "gen_digits": bool(dv.get()),
+                  "gen_symbols": bool(sv.get())}
+        if all(app.settings.get(k) == v for k, v in chosen.items()):
+            return
+        app.settings.update(chosen)
+        save_settings(app.settings)
+
     def use():
         target_entry.delete(0, "end")
         target_entry.insert(0, gen_var.get())
+        remember_options()
         dlg.destroy()
 
     use_btn = ctk.CTkButton(
         bf, text="✅  Use This", height=32,
         font=ctk.CTkFont(size=12, weight="bold"),
-        fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG,
+        fg_color=GREEN, hover_color=GREEN_HOVER, text_color=TEXT_ON_GREEN,
         corner_radius=8, command=use)
     use_btn.pack(side="right", fill="x", expand=True, padx=(4, 0))
     tip(use_btn, "Apply this password to the entry")

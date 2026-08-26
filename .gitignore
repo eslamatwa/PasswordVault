@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Test tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Environment variables
 .env
 .venv

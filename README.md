@@ -1,8 +1,8 @@
 # 🔐 Password Vault
 
-A modern, secure, and elegant password manager for Windows — built with **Python** and **CustomTkinter** in Apple Dark Mode style.
+A modern, secure, and elegant password manager for Windows — built with **Python** and **CustomTkinter** in Apple design style, with both light and dark themes.
 
-**Version:** 3.2 | **Developer:** Eslam Atwa
+**Version:** 3.4 | **Developer:** Eslam Atwa
 
 ---
 
@@ -16,9 +16,16 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 - **Auto-Clear Clipboard** — Optionally clear copied passwords from clipboard after 10–60 seconds.
 - **Atomic File Saves** — Data is written to a temp file first, preventing corruption on crash.
 - **Master Password Validation** — Enforces minimum 8 characters, uppercase, lowercase, and digits.
+- **Single Instance Lock** — Only one copy of the app can run, so two windows can never overwrite each other's vault.
+- **Security Dashboard** — Overall vault score plus weak, reused, and stale password reports.
+- **Breach Check** — Checks passwords against Have I Been Pwned using k-anonymity, so no password or full hash ever leaves the machine.
+- **Encrypted Backup & Restore** — Export the whole vault to a separately-encrypted file and restore it, including from the login screen.
+- **Safe Export** — CSV and Excel exports neutralize spreadsheet formula injection.
+- **Link Guard** — Only `http` and `https` links are ever opened.
+- **Lock Hygiene** — Auto-lock closes every open dialog so no plaintext stays on screen.
 
 ### 🎨 User Interface
-- **Apple Dark Mode Style** — Sleek, modern UI with iOS-inspired colors and rounded corners.
+- **Light & Dark Themes** — Full iOS-inspired palettes for both, switchable from Settings.
 - **Card Color Customization** — Choose from 9 color presets (Blue, Green, Red, Orange, Purple, Teal, Yellow, Pink) for each entry.
 - **Default Card Color** — Set a default color for all new entries in Settings.
 - **Password Strength Meter** — Visual indicator shows password strength in real-time (Very Weak → Very Strong).
@@ -37,6 +44,22 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 - **One-Click Copy** — Copy usernames and passwords to clipboard instantly.
 - **Notes** — Add optional notes to any entry.
 - **Edit & Delete** — Full CRUD operations with confirmation dialogs.
+- **Recycle Bin** — Deleted entries are recoverable for a retention period before being purged.
+- **Duplicate Warning** — The edit dialog flags a password already used by another entry.
+- **CSV & Excel Import/Export** — Round-trips titles, categories, URLs, notes, timestamps, and pinned state.
+
+### ⌨️ Keyboard
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+N` | New password |
+| `Ctrl+F` | Focus search |
+| `Ctrl+L` | Lock vault |
+| `Ctrl+E` | Export data |
+| `Ctrl+I` | Import data |
+| `Enter` | Submit the focused dialog |
+| `Esc` | Close a dialog, or clear the search box |
+
+Shortcuts and `Ctrl+C/V/X/A` are matched by physical key, so they keep working under a non-Latin keyboard layout (Arabic, Russian, etc.).
 
 ### 🖱️ Right-Click Context Menu
 - **Full Context Menu** — Right-click any entry card (in main vault or Mini Vault) for quick actions:
@@ -78,8 +101,11 @@ A complete iOS-style settings page with persistent configuration:
 | 📋 **Security** | Clear Clipboard | Off, or auto-clear after 10, 15, 30, 60 sec |
 | 📏 **Generator** | Default Length | Slider from 6 to 40 characters |
 | 🔤 **Generator** | Character Types | Toggle Uppercase / Lowercase / Digits / Symbols |
+| 🎨 **Appearance** | Theme | Light or Dark |
 | 🎨 **Appearance** | Default Card Color | Choose default color for new entries |
 | 🚀 **Behavior** | Start Minimized | Launch to floating widget instead of full window |
+
+Settings are validated on load: a value with the wrong type or outside its allowed range falls back to the default instead of breaking startup.
 
 All settings are saved to `%APPDATA%\PasswordVault\settings.json`.
 
@@ -137,19 +163,16 @@ All settings are saved to `%APPDATA%\PasswordVault\settings.json`.
 
 ### Step 1: Install Dependencies
 ```bash
-pip install -r requirements.txt
-pip install pyinstaller
+pip install -r requirements-dev.txt
 ```
 
 ### Step 2: Build the Executable
 ```bash
 pyinstaller PasswordVault.spec --noconfirm
 ```
-Or manually:
-```bash
-pyinstaller --noconfirm --onefile --windowed --icon=icon.ico --name=PasswordVault --add-data "icon.ico;." --hidden-import password_vault --hidden-import password_vault.crypto --hidden-import password_vault.security --hidden-import password_vault.settings --hidden-import password_vault.theme --hidden-import password_vault.export_import --hidden-import password_vault.ui --hidden-import password_vault.ui.widgets --hidden-import password_vault.ui.mini_vault --hidden-import password_vault.ui.floating main.py
-```
-This creates `dist/PasswordVault.exe` — a single standalone executable.
+This creates `dist/PasswordVault.exe` — a single standalone executable. Always
+build from the spec: the dialog modules are imported lazily and are listed as
+hidden imports there, so a hand-written command will silently miss them.
 
 ### Step 3: Create the Installer (Optional)
 1. Install [Inno Setup 6](https://jrsoftware.org/isdl.php)
@@ -183,14 +206,25 @@ PasswordVault/
 │   ├── __init__.py                  # APP_VERSION, APP_AUTHOR, logging setup
 │   ├── crypto.py                    # Encryption, key derivation, save/load data
 │   ├── security.py                  # Strength, age, duplicates, HIBP, score, generator
-│   ├── settings.py                  # Settings persistence (load/save JSON)
-│   ├── theme.py                     # Apple Dark Mode colors & card presets
+│   ├── settings.py                  # Settings persistence + validation
+│   ├── theme.py                     # Light/dark palettes & card presets
 │   ├── export_import.py             # CSV & Excel export/import helpers
+│   ├── instance_lock.py             # Single-instance mutex / lock file
 │   └── ui/
 │       ├── __init__.py
 │       ├── widgets.py               # Tooltip, iOS-style group/field/combo, search bar
 │       ├── mini_vault.py            # Mini Vault (compact always-on-top viewer)
-│       └── floating.py              # Floating Widget (draggable bubble)
+│       ├── floating.py              # Floating Widget (draggable bubble)
+│       └── dialogs/
+│           ├── __init__.py
+│           ├── about.py             # About dialog
+│           ├── backup.py            # Encrypted backup export / restore
+│           ├── change_password.py   # Master password change (threaded re-encrypt)
+│           ├── data_io.py           # CSV / Excel export & import
+│           ├── generator.py         # Password generator
+│           ├── security_dashboard.py# Score, weak/reused/old lists, breach check
+│           └── trash.py             # Recycle Bin
+├── tests/                           # Unit tests (pytest / unittest)
 ├── icon.ico                         # Application icon
 ├── PasswordVault.spec               # PyInstaller build spec
 ├── setup.iss                        # Inno Setup installer script
@@ -217,10 +251,29 @@ PasswordVault/
 
 | Package | Purpose |
 |---------|---------|
-| `customtkinter` | Modern UI framework (dark mode) |
+| `customtkinter` | Modern UI framework (light/dark) |
 | `cryptography` | AES encryption (Fernet + PBKDF2) |
 | `pyperclip` | Clipboard copy/paste |
+| `openpyxl` | Excel (.xlsx) export/import |
+| `pytest` | Test runner (dev only) |
+| `pyflakes` | Static analysis (dev only) |
 | `pyinstaller` | Build standalone executable (dev only) |
+
+---
+
+## 🧪 Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q          # unit tests
+python -m pyflakes main.py password_vault tests
+```
+
+The suite covers encryption round-trips and schema migration, restore rollback,
+CSV/Excel import-export fidelity and formula escaping, URL scheme validation,
+password strength/age/duplicate/score logic, generator length handling,
+settings validation, the single-instance lock, and the pure UI helpers. The
+Tk-dependent tests skip themselves automatically when no display is available.
 
 ---
 
@@ -234,7 +287,13 @@ PasswordVault/
 - ⚠️ **Do not lose your Master Password!** There is no way to recover your data without it.
 - Passwords are generated using Python's `secrets` module (cryptographically secure).
 - Clipboard can be auto-cleared after a configurable timeout.
-- All application events are logged to `vault.log` for diagnostics.
+- All application events are logged to `vault.log` for diagnostics. **Passwords are never logged.**
+- Vault and salt files are created with owner-only permissions (`icacls` on Windows, `0600` elsewhere).
+- Breach checking uses the Have I Been Pwned range API: only the first 5 characters of the SHA-1 hash are sent, never the password or its full hash.
+- Changing the master password rotates the salt, so an old vault copy gives no PBKDF2 head start against the new password.
+- Restoring a backup keeps the salt and the ciphertext consistent: if the write fails, the previous salt is put back so the vault stays openable.
+- Only `http` and `https` URLs are opened; any other scheme is refused so a crafted entry cannot invoke a protocol handler.
+- Exported CSV/Excel values are escaped so a cell starting with `=`, `+`, `-`, or `@` cannot execute as a spreadsheet formula.
 
 ---
 

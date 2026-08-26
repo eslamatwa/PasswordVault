@@ -16,14 +16,14 @@ import customtkinter as ctk
 from tkinter import filedialog as tkfiledialog
 
 from ...crypto import (
-    derive_key, export_encrypted_backup, get_or_create_salt,
-    import_encrypted_backup, rotate_salt, save_data,
+    SALT_FILE, derive_key, export_encrypted_backup,
+    import_encrypted_backup, read_salt, rotate_salt, save_data,
 )
 from ...security import password_strength
 from ...theme import (
-    ACCENT, ACCENT_HOVER, BG, BG_TERT, CARD_HOVER,
-    GREEN, GREEN_HOVER, ORANGE, ORANGE_HOVER, RED,
-    TEXT_PRI, TEXT_QUAT, TEXT_SEC,
+    ACCENT, BG_TERT, CARD_HOVER,
+    GREEN, GREEN_HOVER, INFO_BG, ORANGE, ORANGE_HOVER, RED,
+    TEXT_ON_GREEN, TEXT_PRI, TEXT_QUAT, TEXT_SEC, WARN_BG,
 )
 from ..widgets import ios_field, ios_group, tip
 
@@ -41,7 +41,7 @@ def show_export(app) -> None:
                                     weight="bold"),
                   text_color=TEXT_PRI).pack(pady=(14, 4))
 
-    info = ctk.CTkFrame(dlg, fg_color="#22283a", corner_radius=10)
+    info = ctk.CTkFrame(dlg, fg_color=INFO_BG, corner_radius=10)
     info.pack(fill="x", padx=20, pady=(8, 12))
     ctk.CTkLabel(
         info,
@@ -136,7 +136,7 @@ def show_export(app) -> None:
     save_btn = ctk.CTkButton(
         frm, text="🛟  Create Backup", height=38,
         font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-        fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG,
+        fg_color=GREEN, hover_color=GREEN_HOVER, text_color=TEXT_ON_GREEN,
         corner_radius=10, command=do_export)
     save_btn.pack(fill="x", padx=14, pady=(0, 6))
     tip(save_btn, "Encrypt the vault and save it to a backup file")
@@ -178,7 +178,7 @@ def _show_restore_dialog(app, *, on_restore, at_login: bool = False) -> None:
                   text_color=TEXT_PRI).pack(pady=(14, 4))
 
     if at_login:
-        warn = ctk.CTkFrame(dlg, fg_color="#3a2a20", corner_radius=10)
+        warn = ctk.CTkFrame(dlg, fg_color=WARN_BG, corner_radius=10)
         warn.pack(fill="x", padx=20, pady=(8, 8))
         ctk.CTkLabel(
             warn,
@@ -187,7 +187,7 @@ def _show_restore_dialog(app, *, on_restore, at_login: bool = False) -> None:
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color=ORANGE, justify="center").pack(padx=12, pady=8)
     else:
-        warn = ctk.CTkFrame(dlg, fg_color="#3a2a20", corner_radius=10)
+        warn = ctk.CTkFrame(dlg, fg_color=WARN_BG, corner_radius=10)
         warn.pack(fill="x", padx=20, pady=(8, 8))
         ctk.CTkLabel(
             warn,
@@ -301,8 +301,15 @@ def _basic_master_check(pw: str) -> str | None:
 def _restore_into_unlocked_vault(app, data: dict, dlg, _new_master) -> None:
     """Replace current entries with backup contents, re-encrypt with
     the existing master key. Leaves the master password unchanged."""
+    previous = app.data
     app.data = data
-    save_data(app.data, app.key)
+    try:
+        save_data(app.data, app.key)
+    except (OSError, ValueError, TypeError):
+        # Put the live vault back, otherwise the session would keep editing
+        # backup data that never reached disk.
+        app.data = previous
+        raise
     log.info("Vault restored from backup (unlocked).")
     if hasattr(app, "refresh_categories"):
         app.refresh_categories()
@@ -311,16 +318,39 @@ def _restore_into_unlocked_vault(app, data: dict, dlg, _new_master) -> None:
     dlg.destroy()
 
 
+def _undo_salt(previous: bytes | None) -> None:
+    """Put the pre-rotation salt back after a failed restore."""
+    try:
+        if previous is None:
+            if os.path.exists(SALT_FILE):
+                os.remove(SALT_FILE)
+        else:
+            rotate_salt(previous)
+    except OSError as exc:
+        log.critical("Could not restore the previous salt: %s", exc,
+                     exc_info=True)
+
+
 def _restore_to_new_vault(app, data: dict, dlg, new_master: str) -> None:
     """Restore at login: rotate salt, derive a new master key, save the
     backup data encrypted with that key, then unlock the app."""
     new_salt = os.urandom(32)
     new_key = derive_key(new_master, new_salt)
-    # Save with new key first; only then commit the new salt.
+    # Commit the salt before the ciphertext. This runs before unlock, so the
+    # old master key is unknown and a failed write cannot be rolled back by
+    # re-encrypting; putting the old salt back is the only recovery, and it
+    # matches the untouched vault file that save_data leaves behind on error.
+    previous_salt = read_salt()
+    rotate_salt(new_salt)
+    previous_key, previous_data = app.key, app.data
     app.key = new_key
     app.data = data
-    save_data(app.data, app.key)
-    rotate_salt(new_salt)
+    try:
+        save_data(app.data, app.key)
+    except (OSError, ValueError, TypeError):
+        app.key, app.data = previous_key, previous_data
+        _undo_salt(previous_salt)
+        raise
     log.info("Vault restored from backup at login (new master set).")
     dlg.destroy()
     # Hand off to the live app login flow.

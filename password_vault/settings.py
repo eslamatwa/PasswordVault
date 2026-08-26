@@ -24,6 +24,9 @@ LOCKOUT_SECONDS = 30
 TRASH_DAYS = 30
 PASSWORD_AGE_WARNING = 90
 
+# Appearance modes, in the order they appear in Settings.
+THEME_MODES = ("System", "Dark", "Light")
+
 DEFAULT_SETTINGS: dict = {
     "auto_lock_minutes": 5,
     "gen_length": 16,
@@ -36,21 +39,72 @@ DEFAULT_SETTINGS: dict = {
     "max_login_attempts": 5,
     "lockout_seconds": 30,
     "clipboard_clear_seconds": 30,
+    "theme": "Dark",
+}
+
+# key -> (expected type, extra check or None). Anything not listed here is
+# not a setting this version understands.
+_SPEC: dict[str, tuple] = {
+    "auto_lock_minutes": (int, lambda v: 0 <= v <= 24 * 60),
+    "gen_length": (int, lambda v: 4 <= v <= 128),
+    "gen_upper": (bool, None),
+    "gen_lower": (bool, None),
+    "gen_digits": (bool, None),
+    "gen_symbols": (bool, None),
+    "start_minimized": (bool, None),
+    "default_card_color": (str, lambda v: bool(v) and len(v) <= 32),
+    "max_login_attempts": (int, lambda v: 1 <= v <= 100),
+    "lockout_seconds": (int, lambda v: 0 <= v <= 24 * 3600),
+    "clipboard_clear_seconds": (int, lambda v: 0 <= v <= 3600),
+    "theme": (str, lambda v: v in THEME_MODES),
 }
 
 
+def _accepted(saved: dict) -> dict:
+    """Keep only the stored values that match their expected type and range.
+
+    Saved settings used to be merged blindly, so a corrupted or hand-edited
+    file could put a string into ``auto_lock_minutes``; that value then
+    reached ``after()`` and broke the idle timer at runtime.
+    """
+    clean: dict = {}
+    for key, value in saved.items():
+        spec = _SPEC.get(key)
+        if spec is None:
+            log.warning("Ignoring unknown setting %r.", key)
+            continue
+        expected, extra_check = spec
+        if expected is bool:
+            ok = isinstance(value, bool)
+        elif expected is int:
+            # bool is an int subclass, but "true" is not a duration.
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        else:
+            ok = isinstance(value, expected)
+        if ok and extra_check is not None:
+            ok = extra_check(value)
+        if ok:
+            clean[key] = value
+        else:
+            log.warning("Ignoring out-of-range value for setting %r.", key)
+    return clean
+
+
 def load_settings() -> dict:
-    """Load user settings from disk, merged with defaults."""
+    """Load user settings from disk, merged over the defaults."""
+    merged = dict(DEFAULT_SETTINGS)
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            merged = dict(DEFAULT_SETTINGS)
-            merged.update(saved)
-            return merged
         except (json.JSONDecodeError, OSError) as exc:
             log.warning("Failed to load settings: %s", exc)
-    return dict(DEFAULT_SETTINGS)
+            return merged
+        if not isinstance(saved, dict):
+            log.warning("Settings file is not an object; using defaults.")
+            return merged
+        merged.update(_accepted(saved))
+    return merged
 
 
 def save_settings(settings: dict) -> None:

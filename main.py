@@ -12,7 +12,6 @@ import customtkinter as ctk
 import tkinter as tk
 
 import datetime
-import hashlib
 import logging
 import os
 import re
@@ -28,17 +27,17 @@ import pyperclip
 
 from cryptography.fernet import InvalidToken
 
-from password_vault import APP_VERSION
+from password_vault import instance_lock
 from password_vault.theme import (
     CARD_COLORS, BG, BG_SEC, BG_TERT, SEPARATOR,
     ACCENT, ACCENT_HOVER, GREEN, GREEN_HOVER, RED, RED_HOVER,
     ORANGE, YELLOW, TEAL,
-    TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
+    TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT, TEXT_ON_ACCENT, TEXT_ON_GREEN,
     BADGE_BG, INPUT_BG, CARD_HOVER, SIDEBAR_BG, SIDEBAR_SEL,
-    cat_emoji,
+    cat_emoji, menu_style, resolve,
 )
 from password_vault.settings import (
-    AUTO_LOCK_MINUTES, MAX_LOGIN_ATTEMPTS, LOCKOUT_SECONDS,
+    AUTO_LOCK_MINUTES, MAX_LOGIN_ATTEMPTS, LOCKOUT_SECONDS, THEME_MODES,
     load_settings, save_settings,
 )
 from password_vault.crypto import (
@@ -46,17 +45,44 @@ from password_vault.crypto import (
     get_or_create_salt, derive_key, save_data, load_data,
 )
 from password_vault.security import (
-    password_strength, password_age_text,
+    password_strength, password_age_text, safe_url, password_hash,
 )
 from password_vault.ui.widgets import (
     tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
     bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
+    ui_font, elide, filter_entries,
 )
 from password_vault.ui.mini_vault import MiniVault
 from password_vault.ui.floating import FloatingWidget
 
 # ─── Logging ──────────────────────────────────────────────────
 log = logging.getLogger("PasswordVault")
+
+# How many entry cards to build per render pass. Tk has no virtualized list,
+# so an unbounded vault would create thousands of widgets on every keystroke.
+ENTRIES_PAGE_SIZE = 60
+
+# Minimum gap between idle-timer reschedules. <Motion> fires dozens of times
+# per second; without this every mouse move cancels and re-arms a Tk timer.
+IDLE_RESET_THROTTLE_SEC = 5
+
+# Delay before a low-value change (pin toggle) is flushed to disk. Saving
+# re-encrypts the whole vault, so rapid toggles should coalesce.
+SAVE_DEBOUNCE_MS = 800
+
+# Fixed-width placeholder for a hidden password, so the rendered width says
+# nothing about the real length.
+PASSWORD_MASK = "●" * 10
+
+# Card titles longer than this are elided; the full text moves to a tooltip.
+TITLE_MAX_CHARS = 38
+
+# Categories whose entries always offer SSH / RDP actions.
+REMOTE_CATEGORIES = frozenset({"server", "vpn", "ssh", "rdp", "database"})
+
+# Windows virtual-key codes for the Ctrl shortcuts, so they keep working
+# under a non-Latin keyboard layout where the keysym is localized.
+_SHORTCUT_KEYCODES = {78: "n", 70: "f", 76: "l", 69: "e", 73: "i"}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -75,13 +101,22 @@ class PasswordVault:
         self._failed_streak = 0  # cumulative; doesn't reset on each lockout
         self._lockout_until = 0
         self._idle_timer = None
+        self._last_idle_reset = 0.0
         self._main_frame = None
         self._clipboard_timer = None
+        self._clipboard_digest = None
         self._search_bar = None
         self._search_after_id = None
+        self._visible_limit = ENTRIES_PAGE_SIZE
+        self._save_timer = None
+        self._save_pending = False
+        self._shortcuts_bound = False
+        # Open modal dialogs, innermost last: the grab has to be handed back
+        # when a nested dialog closes.
+        self._grab_stack: list = []
 
         self.settings = load_settings()
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode(self.settings.get("theme", "Dark"))
 
         self.root = ctk.CTk()
         self.root.title("Password Vault")
@@ -106,6 +141,7 @@ class PasswordVault:
             pass
 
         self._setup_input_helpers()
+        self._bind_activity_events()
         self.show_login()
 
     # ─── Universal clipboard & right-click for all inputs ────
@@ -156,6 +192,7 @@ class PasswordVault:
                     return "break"
 
             self.root.bind_all("<Key>", _on_key, add="+")
+            self.root.bind_all("<Key>", self._on_shortcut_keycode, add="+")
 
         # ── Right-click context menu ──────────────────────────
         def _ctx_menu(event):
@@ -166,9 +203,7 @@ class PasswordVault:
             # Give focus so selection is visible
             w.focus_set()
 
-            menu = tk.Menu(w, tearoff=0, bg=BG_SEC, fg=TEXT_PRI,
-                           activebackground=ACCENT, activeforeground="white",
-                           font=("Segoe UI", 10))
+            menu = tk.Menu(w, tearoff=0, **menu_style())
 
             # Check selection
             has_sel = False
@@ -224,42 +259,126 @@ class PasswordVault:
         self.root.bind_class("Text", "<Button-3>", _ctx_menu)
 
     # ─── Auto-Lock ───────────────────────────────────────────
-    def _start_idle_timer(self):
-        self._bind_activity_events()
-        self._reset_idle()
-
     def _bind_activity_events(self):
-        for ev in ("<Motion>", "<Key>", "<Button>", "<MouseWheel>"):
-            self.root.bind(ev, self._reset_idle, add="+")
+        """Track user activity across every window, once per process.
 
-    def _unbind_activity_events(self):
+        `bind_all` rather than `root.bind`: with root-only bindings the app
+        saw no activity while the Mini Vault or a dialog had focus and
+        locked under the user's hands. These bindings are never removed —
+        unbinding would clear the shared "all" bindtag that also carries the
+        clipboard key handler, and `_reset_idle` already ignores events
+        while the vault is locked.
+        """
         for ev in ("<Motion>", "<Key>", "<Button>", "<MouseWheel>"):
-            self.root.unbind(ev)
+            self.root.bind_all(ev, self._reset_idle, add="+")
 
-    def _reset_idle(self, event=None):
+    def _start_idle_timer(self):
+        self._reset_idle(force=True)
+
+    def _reset_idle(self, event=None, force=False):
+        """Re-arm the auto-lock timer.
+
+        Throttled: activity within IDLE_RESET_THROTTLE_SEC of the last reset
+        is ignored, which bounds the effective lock time to the configured
+        interval plus that window. Pass *force* when the interval itself
+        changed and the timer must be re-armed immediately.
+        """
+        if self.key is None:
+            return
+        now = time.time()
+        if not force and now - self._last_idle_reset < IDLE_RESET_THROTTLE_SEC:
+            return
+        self._last_idle_reset = now
         if self._idle_timer:
-            self.root.after_cancel(self._idle_timer)
+            try:
+                self.root.after_cancel(self._idle_timer)
+            except (tk.TclError, ValueError):
+                pass
+            self._idle_timer = None
         mins = self.settings.get("auto_lock_minutes", AUTO_LOCK_MINUTES)
         if mins > 0:
             self._idle_timer = self.root.after(
                 mins * 60 * 1000, self._auto_lock)
 
+    # ─── Deferred Save ───────────────────────────────────────
+    def _schedule_save(self):
+        """Coalesce rapid low-value writes into a single re-encrypt.
+
+        Always paired with _flush_pending_save() on lock, minimize and quit
+        so a pending change can never be lost silently.
+        """
+        self._save_pending = True
+        if self._save_timer:
+            try:
+                self.root.after_cancel(self._save_timer)
+            except (tk.TclError, ValueError):
+                pass
+        self._save_timer = self.root.after(
+            SAVE_DEBOUNCE_MS, self._flush_pending_save)
+
+    def _flush_pending_save(self):
+        if self._save_timer:
+            try:
+                self.root.after_cancel(self._save_timer)
+            except (tk.TclError, ValueError):
+                pass
+            self._save_timer = None
+        if not self._save_pending:
+            return
+        if self.data is None or self.key is None:
+            self._save_pending = False
+            return
+        try:
+            save_data(self.data, self.key)
+        except (OSError, ValueError, TypeError) as exc:
+            # Keep the change pending so the next flush (lock, minimize or
+            # quit) retries it instead of dropping it.
+            log.error("Deferred save failed: %s", exc, exc_info=True)
+            return
+        self._save_pending = False
+
+    def _destroy_open_dialogs(self):
+        """Close every open child window before the vault locks.
+
+        Dialogs render plaintext passwords and hold their own references to
+        the vault; leaving them up meant secrets stayed on screen after the
+        lock and a later save from one of them hit a cleared key.
+
+        The floating widget is kept on purpose: it carries no secrets and is
+        the only way back into the app while the main window is hidden.
+        """
+        keep = self.floating_widget
+        for child in list(self.root.winfo_children()):
+            if not isinstance(child, tk.Toplevel):
+                continue
+            if keep is not None and child is keep:
+                continue
+            try:
+                child.grab_release()
+            except tk.TclError:
+                pass
+            try:
+                child.destroy()
+            except tk.TclError:
+                pass
+
     def _auto_lock(self):
         log.info("Vault auto-locked due to inactivity.")
-        # Python strings are immutable; GC may retain copies of sensitive
-        # data after refs drop. There's no portable way to securely wipe
-        # them. Just release references and let the GC reclaim.
-        self.key = None
-        self.data = None
-        self._idle_timer = None
-        self._unbind_activity_events()
-        self._unbind_shortcuts()
+        self._flush_pending_save()
         if self.mini_vault:
             try:
                 self.mini_vault.destroy()
             except tk.TclError:
                 pass
             self.mini_vault = None
+        self._destroy_open_dialogs()
+        # Python strings are immutable; GC may retain copies of sensitive
+        # data after refs drop. There's no portable way to securely wipe
+        # them. Just release references and let the GC reclaim.
+        self.key = None
+        self.data = None
+        self._idle_timer = None
+        self._unbind_shortcuts()
         if self._main_frame and self._main_frame.winfo_exists():
             self._main_frame.destroy()
             self._main_frame = None
@@ -494,13 +613,21 @@ class PasswordVault:
                 self.error_label.configure(
                     text=f"⚠️ Wrong password ({rem} attempts left)")
             return
+        except (OSError, ValueError) as exc:
+            # Unreadable or implausibly large vault file — not a bad
+            # password, so don't count it as a failed attempt.
+            log.error("Vault could not be read: %s", exc, exc_info=True)
+            self.key = None
+            self.error_label.configure(
+                text="⚠️ Vault file could not be read")
+            return
 
         self._login_attempts = 0
         self._failed_streak = 0  # success — reset escalation
         log.info("Vault unlocked successfully%s.",
                  " (new vault created)" if is_new else "")
         if is_new:
-            save_data(self.data, self.key)
+            self._save_guarded()
         self.login_frame.destroy()
         self.build_ui()
 
@@ -539,6 +666,7 @@ class PasswordVault:
             self._search_cat_filter,
             height=32, width=260)
         self._search_bar.pack(side="left", padx=16)
+        self._search_bar._entry.bind("<Escape>", self._clear_search)
 
         # Settings
         settings_btn = ctk.CTkButton(
@@ -606,9 +734,7 @@ class PasswordVault:
 
 
     def _search_cat_filter(self, cat):
-        self.current_category = cat
-        self.refresh_categories()
-        self.refresh_entries()
+        self.select_cat(cat)
 
     def _debounced_refresh(self):
         """Debounce search-triggered refreshes — 300ms idle then refresh."""
@@ -617,26 +743,53 @@ class PasswordVault:
                 self.root.after_cancel(self._search_after_id)
             except tk.TclError:
                 pass
-        self._search_after_id = self.root.after(300, self.refresh_entries)
+        self._search_after_id = self.root.after(300, self._refresh_from_search)
+
+    def _refresh_from_search(self):
+        self._visible_limit = ENTRIES_PAGE_SIZE
+        self.refresh_entries()
 
     # ─── Keyboard Shortcuts ──────────────────────────────────
+    def _shortcut_actions(self) -> dict:
+        return {
+            "n": self.show_entry_dialog,
+            "f": self._focus_search,
+            "l": self._auto_lock,
+            "e": self.show_export_dialog,
+            "i": self.show_import_dialog,
+        }
+
     def _bind_shortcuts(self):
-        self.root.bind("<Control-n>",
-                        lambda e: self.show_entry_dialog())
-        self.root.bind("<Control-f>", lambda e: self._focus_search())
-        self.root.bind("<Control-l>", lambda e: self._auto_lock())
-        self.root.bind("<Control-e>",
-                        lambda e: self.show_export_dialog())
-        self.root.bind("<Control-i>",
-                        lambda e: self.show_import_dialog())
+        for letter, action in self._shortcut_actions().items():
+            self.root.bind(f"<Control-{letter}>",
+                            lambda _e, a=action: a())
+        self._shortcuts_bound = True
 
     def _unbind_shortcuts(self):
-        for sc in ("<Control-n>", "<Control-f>", "<Control-l>",
-                   "<Control-e>", "<Control-i>"):
+        for letter in self._shortcut_actions():
             try:
-                self.root.unbind(sc)
+                self.root.unbind(f"<Control-{letter}>")
             except tk.TclError:
                 pass
+        self._shortcuts_bound = False
+
+    def _on_shortcut_keycode(self, event):
+        """Run Ctrl shortcuts by physical key, whatever the input language.
+
+        With a non-Latin layout active Tk reports the localized keysym, so
+        the `<Control-n>` style bindings above never fire and the shortcuts
+        silently stopped working.
+        """
+        if not self._shortcuts_bound or not (event.state & 0x4):
+            return None
+        letter = _SHORTCUT_KEYCODES.get(event.keycode)
+        if letter is None or event.keysym.lower() == letter:
+            return None  # Latin layout: the keysym binding already ran.
+        action = self._shortcut_actions().get(letter)
+        if action is None:
+            return None
+        action()
+        return "break"
 
     def _focus_search(self):
         if self._search_bar:
@@ -645,11 +798,16 @@ class PasswordVault:
             except (tk.TclError, AttributeError):
                 pass
 
+    def _clear_search(self, _event=None):
+        """Escape empties the query — the only way back to the full list
+        was selecting the whole field and deleting it."""
+        if self.search_var.get():
+            self.search_var.set("")
+        return "break"
+
     # ─── Settings Menu ───────────────────────────────────────
     def show_settings_menu(self):
-        menu = tk.Menu(self.root, tearoff=0, bg=BG_SEC, fg=TEXT_PRI,
-                       activebackground=ACCENT, activeforeground="white",
-                       font=("Segoe UI", 10))
+        menu = tk.Menu(self.root, tearoff=0, **menu_style())
         menu.add_command(label="⚙️  Settings",
                           command=self.show_settings_dialog)
         menu.add_command(label="🔑  Change Master Password",
@@ -678,6 +836,8 @@ class PasswordVault:
         menu.add_separator()
         menu.add_command(label="ℹ️  About",
                           command=self.show_about_dialog)
+        menu.add_separator()
+        menu.add_command(label="✕  Exit", command=self.confirm_quit)
         try:
             menu.post(self.root.winfo_pointerx(),
                       self.root.winfo_pointery())
@@ -841,7 +1001,20 @@ class PasswordVault:
         # ── APPEARANCE ──
         g_app = ios_group(scroll, "Appearance")
 
-        r10, lbl10 = setting_row(g_app, "🎨", "Default Card Color", idx=0)
+        r_th, lbl_th = setting_row(g_app, "🌗", "Theme", idx=0)
+        th_var = ctk.StringVar(value=s.get("theme", "Dark"))
+        th_opt = ctk.CTkOptionMenu(
+            r_th, values=list(THEME_MODES), variable=th_var,
+            width=100, height=28, font=ctk.CTkFont(size=11),
+            fg_color=BG_TERT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER, text_color=TEXT_PRI,
+            dropdown_fg_color=BG_SEC, dropdown_text_color=TEXT_PRI,
+            command=lambda choice: ctk.set_appearance_mode(choice))
+        th_opt.pack(side="right")
+        tip(lbl_th, "Light, dark, or follow the Windows setting. "
+                    "Applies immediately.")
+
+        r10, lbl10 = setting_row(g_app, "🎨", "Default Card Color", idx=1)
         tip(lbl10, "Default color for new password entries.")
 
         def_color_var = ctk.StringVar(
@@ -857,7 +1030,7 @@ class PasswordVault:
                 width=28, height=28, fg_color=btn_color,
                 hover_color=btn_color, corner_radius=14,
                 font=ctk.CTkFont(size=12, weight="bold"),
-                text_color="white",
+                text_color=TEXT_ON_ACCENT,
                 command=lambda k=ckey: _sel_def_color(k))
             b.pack(side="left", padx=3)
             color_btns[ckey] = b
@@ -881,6 +1054,19 @@ class PasswordVault:
         tip(lbl11, "Start the app minimized to the floating widget.")
 
         # ── SAVE ──
+        saved_theme = {"kept": False}
+
+        def _revert_theme_preview(event):
+            # The toplevel is in every child's bindtags, so <Destroy> also
+            # arrives here for each child widget.
+            if event.widget is not dlg or saved_theme["kept"]:
+                return
+            # The picker previews immediately; dismissing without saving must
+            # not leave the app in a mode that is not stored.
+            ctk.set_appearance_mode(self.settings.get("theme", "Dark"))
+
+        dlg.bind("<Destroy>", _revert_theme_preview, add="+")
+
         def apply_settings():
             self.settings["auto_lock_minutes"] = al_map.get(
                 al_var.get(), 5)
@@ -896,8 +1082,10 @@ class PasswordVault:
             self.settings["gen_symbols"] = bool(gen_symbols.get())
             self.settings["default_card_color"] = def_color_var.get()
             self.settings["start_minimized"] = bool(start_min.get())
+            self.settings["theme"] = th_var.get()
+            saved_theme["kept"] = True
             save_settings(self.settings)
-            self._reset_idle()
+            self._reset_idle(force=True)
             dlg.destroy()
 
         bottom = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -919,14 +1107,16 @@ class PasswordVault:
     def refresh_categories(self):
         for w in self.cat_frame.winfo_children():
             w.destroy()
+        entries = self.data["entries"]
+        # One pass over entries instead of one pass per category.
+        per_cat: dict[str, int] = {}
+        for e in entries:
+            key = e.get("category")
+            if key:
+                per_cat[key] = per_cat.get(key, 0) + 1
         cats = ["All"] + self.data.get("categories", [])
         for cat in cats:
-            if cat == "All":
-                count = len(self.data["entries"])
-            else:
-
-                count = sum(1 for e in self.data["entries"]
-                            if e.get("category") == cat)
+            count = len(entries) if cat == "All" else per_cat.get(cat, 0)
             emoji = "🗂️" if cat == "All" else cat_emoji(cat)
             active = cat == self.current_category
 
@@ -937,12 +1127,10 @@ class PasswordVault:
             btn = ctk.CTkButton(
 
                 row, text=f" {emoji}  {cat}   ({count})",
-                font=ctk.CTkFont(
-                    family="Segoe UI", size=12,
-                    weight="bold" if active else "normal"),
+                font=ui_font(12, "bold" if active else "normal"),
                 fg_color=SIDEBAR_SEL if active else "transparent",
                 hover_color=(ACCENT_HOVER if active else BG_TERT),
-                text_color="white" if active else TEXT_PRI,
+                text_color=TEXT_ON_ACCENT if active else TEXT_PRI,
                 anchor="w", height=34, corner_radius=8,
                 command=lambda c=cat: self.select_cat(c))
             btn.pack(side="left", fill="x", expand=True)
@@ -952,7 +1140,7 @@ class PasswordVault:
             if cat != "All":
                 del_btn = ctk.CTkButton(
                     row, text="✕", width=26, height=26,
-                    font=ctk.CTkFont(size=10), fg_color="transparent",
+                    font=ui_font(10, family=None), fg_color="transparent",
                     hover_color=RED_HOVER, corner_radius=6,
                     text_color=TEXT_TERT,
                     command=lambda c=cat: self.confirm_delete_category(c))
@@ -961,6 +1149,7 @@ class PasswordVault:
 
     def select_cat(self, cat):
         self.current_category = cat
+        self._visible_limit = ENTRIES_PAGE_SIZE
         self.refresh_categories()
         self.refresh_entries()
 
@@ -992,7 +1181,7 @@ class PasswordVault:
             self.data["categories"].remove(cat_name)
             if "General" not in self.data["categories"]:
                 self.data["categories"].insert(0, "General")
-            save_data(self.data, self.key)
+            self._save_guarded()
             dlg.destroy()
             if self.current_category == cat_name:
                 self.current_category = "All"
@@ -1003,12 +1192,16 @@ class PasswordVault:
             bf, text="Delete", fg_color=RED, hover_color=RED_HOVER,
             width=140, height=36, font=ctk.CTkFont(size=13),
             corner_radius=10, command=do_del).pack(side="left", padx=4)
-        ctk.CTkButton(
+        cancel = ctk.CTkButton(
             bf, text="Cancel", fg_color=BG_TERT,
             hover_color=CARD_HOVER, width=140, height=36,
             font=ctk.CTkFont(size=13), corner_radius=10,
-            command=dlg.destroy).pack(side="right", padx=4)
-        dlg.bind("<Return>", lambda _e: do_del())
+            command=dlg.destroy)
+        cancel.pack(side="right", padx=4)
+        # No Return binding on the destructive action: Enter cancels, and
+        # deleting a category takes a deliberate click.
+        dlg.bind("<Return>", lambda _e: dlg.destroy())
+        cancel.focus()
 
     # ─── Entries ─────────────────────────────────────────────
     def refresh_entries(self):
@@ -1017,20 +1210,9 @@ class PasswordVault:
 
         search = ""
         if hasattr(self, "search_var"):
-            search = self.search_var.get().lower()
-        entries = list(self.data["entries"])
-        if self.current_category != "All":
-
-            entries = [e for e in entries
-                       if e.get("category") == self.current_category]
-        if search:
-
-            entries = [e for e in entries
-                       if search in e.get("title", "").lower()
-                       or search in e.get("username", "").lower()
-                       or search in e.get("url", "").lower()
-                       or search in e.get("category", "").lower()
-                       or search in e.get("notes", "").lower()]
+            search = self.search_var.get()
+        entries = filter_entries(
+            self.data["entries"], self.current_category, search)
         entries = sort_entries_pinned_first(entries)
         if not entries:
 
@@ -1046,8 +1228,26 @@ class PasswordVault:
                           font=ctk.CTkFont(family="Segoe UI", size=12),
                           text_color=TEXT_QUAT).pack(pady=(4, 0))
             return
-        for entry in entries:
+        for entry in entries[:self._visible_limit]:
             self._card(entry)
+        hidden = len(entries) - self._visible_limit
+        if hidden > 0:
+            self._add_show_more(hidden)
+
+    def _add_show_more(self, hidden: int):
+        """Footer that extends the render window by one more page."""
+        btn = ctk.CTkButton(
+            self.entries_panel,
+            text=f"⬇  Show more  ({hidden} hidden)",
+            height=34, font=ui_font(12),
+            fg_color=BG_SEC, hover_color=BG_TERT, corner_radius=8,
+            text_color=TEXT_SEC, command=self._show_more_entries)
+        btn.pack(fill="x", padx=8, pady=(6, 10))
+        tip(btn, f"Render the next {ENTRIES_PAGE_SIZE} entries")
+
+    def _show_more_entries(self):
+        self._visible_limit += ENTRIES_PAGE_SIZE
+        self.refresh_entries()
 
     def _card(self, entry):
 
@@ -1079,7 +1279,7 @@ class PasswordVault:
             r1, text="📌" if is_pinned else "○",
             width=24, height=24, fg_color="transparent",
             hover_color=BG_TERT, corner_radius=5,
-            font=ctk.CTkFont(size=11 if is_pinned else 9),
+            font=ui_font(11 if is_pinned else 9, family=None),
             text_color=YELLOW if is_pinned else TEXT_QUAT,
             command=lambda: self._toggle_pin(entry))
         pin_btn.pack(side="left", padx=(0, 2))
@@ -1088,12 +1288,15 @@ class PasswordVault:
 
         emoji = cat_emoji(entry.get("category", ""))
 
-        ctk.CTkLabel(r1, text=f"{emoji}  {entry.get('title', '')}",
-                      font=ctk.CTkFont(family="Segoe UI", size=13,
-                                        weight="bold"),
-                      text_color=TEXT_PRI).pack(side="left")
+        full_title = entry.get("title", "")
+        title_lbl = ctk.CTkLabel(
+            r1, text=f"{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
+            font=ui_font(13, "bold"), text_color=TEXT_PRI)
+        title_lbl.pack(side="left")
+        if len(full_title) > TITLE_MAX_CHARS:
+            tip(title_lbl, full_title)
         ctk.CTkLabel(r1, text=f" {entry.get('category', '')} ",
-                      font=ctk.CTkFont(family="Segoe UI", size=9),
+                      font=ui_font(9),
                       text_color=TEXT_SEC, fg_color=BADGE_BG,
                       corner_radius=4).pack(side="left", padx=(8, 0))
 
@@ -1101,7 +1304,7 @@ class PasswordVault:
         del_btn = ctk.CTkButton(
             r1, text="🗑", width=24, height=24, fg_color="transparent",
             hover_color=RED_HOVER, corner_radius=5,
-            font=ctk.CTkFont(size=11),
+            font=ui_font(11, family=None),
             command=lambda: self.confirm_delete(entry))
         del_btn.pack(side="right", padx=1)
         tip(del_btn, "Move to Recycle Bin")
@@ -1110,7 +1313,7 @@ class PasswordVault:
         edit_btn = ctk.CTkButton(
             r1, text="✏", width=24, height=24, fg_color="transparent",
             hover_color=BG_TERT, corner_radius=5,
-            font=ctk.CTkFont(size=11),
+            font=ui_font(11, family=None),
             command=lambda: self.show_entry_dialog(entry))
         edit_btn.pack(side="right", padx=1)
         tip(edit_btn, "Edit this entry")
@@ -1119,7 +1322,7 @@ class PasswordVault:
         age_t, age_c = password_age_text(
             entry.get("modified_at") or entry.get("created_at"))
         if age_t:
-            ctk.CTkLabel(r1, text=age_t, font=ctk.CTkFont(size=9),
+            ctk.CTkLabel(r1, text=age_t, font=ui_font(9, family=None),
                           text_color=age_c).pack(
                 side="right", padx=(0, 6))
 
@@ -1129,14 +1332,15 @@ class PasswordVault:
         r2.pack(fill="x", pady=(0, 1))
 
         ctk.CTkLabel(r2, text=f"👤 {entry.get('username', '')}",
-                      font=ctk.CTkFont(family="Segoe UI", size=11),
+                      font=ui_font(11),
                       text_color=TEXT_SEC, anchor="w").pack(side="left")
         cu = ctk.CTkButton(
             r2, text="📋", width=28, height=22,
-            font=ctk.CTkFont(size=10),
-            fg_color=GREEN, hover_color=GREEN_HOVER, text_color=BG,
-            corner_radius=5,
-                            command=lambda: self._copy(entry.get("username", ""), cu))
+            font=ui_font(10, family=None),
+            fg_color=GREEN, hover_color=GREEN_HOVER,
+            text_color=TEXT_ON_GREEN, corner_radius=5,
+            command=lambda: self._copy_to_clipboard(
+                entry.get("username", ""), cu))
 
         cu.pack(side="left", padx=(6, 0))
         tip(cu, "Copy username")
@@ -1146,10 +1350,10 @@ class PasswordVault:
         if url:
             url_btn = ctk.CTkButton(
                 r2, text="🌐", width=28, height=22,
-                font=ctk.CTkFont(size=10),
+                font=ui_font(10, family=None),
                 fg_color=BG_TERT, hover_color=TEXT_QUAT,
                 text_color=TEAL, corner_radius=5,
-                command=lambda u=url: webbrowser.open(u))
+                command=lambda u=url: self._open_url(u))
             url_btn.pack(side="left", padx=(4, 0))
             tip(url_btn, f"Open {url}")
 
@@ -1157,34 +1361,35 @@ class PasswordVault:
 
         cp = ctk.CTkButton(
             r2, text="🔑 Copy", width=65, height=22,
-            font=ctk.CTkFont(size=10),
+            font=ui_font(10, family=None),
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color="white", corner_radius=5,
-                            command=lambda: self._copy(pwd, cp))
+            text_color=TEXT_ON_ACCENT, corner_radius=5,
+            command=lambda: self._copy_to_clipboard(pwd, cp))
         cp.pack(side="right")
 
         tip(cp, "Copy password")
 
-        plbl = ctk.CTkLabel(r2, text="●" * min(len(pwd), 12),
-                              font=ctk.CTkFont(size=11),
-                              text_color=TEXT_TERT, anchor="e")
+        # Fixed-width mask: one dot per character published the exact length
+        # of every password to anyone glancing at the screen.
+        plbl = ctk.CTkLabel(r2, text=PASSWORD_MASK,
+                              font=ui_font(11, family=None),
+                              text_color=TEXT_TERT, anchor="e",
+                              wraplength=240, justify="right")
         plbl.pack(side="right", padx=(0, 4))
 
+        revealed = {"on": False}
+
         def toggle(lbl=plbl, real=pwd):
-            if "●" in lbl.cget("text"):
-
-                lbl.configure(text=real[:20])
-                eye.configure(text="🙈")
-            else:
-
-                lbl.configure(text="●" * min(len(real), 12))
-                eye.configure(text="👁")
-
+            revealed["on"] = not revealed["on"]
+            # Show the whole value: the old 20-character cut made the user
+            # read a password that was not the one stored.
+            lbl.configure(text=real if revealed["on"] else PASSWORD_MASK)
+            eye.configure(text="🙈" if revealed["on"] else "👁")
 
         eye = ctk.CTkButton(
             r2, text="👁", width=24, height=22, fg_color="transparent",
             hover_color=BG_TERT, corner_radius=5,
-            font=ctk.CTkFont(size=10), command=toggle)
+            font=ui_font(10, family=None), command=toggle)
         eye.pack(side="right", padx=(0, 2))
         tip(eye, "Show / hide password")
 
@@ -1192,7 +1397,7 @@ class PasswordVault:
         if url:
             ctk.CTkLabel(inner,
                           text=f"🔗 {url[:60]}{'…' if len(url) > 60 else ''}",
-                          font=ctk.CTkFont(family="Segoe UI", size=10),
+                          font=ui_font(10),
                           text_color=TEAL, anchor="w", cursor="hand2").pack(
                 fill="x", pady=(1, 0))
 
@@ -1201,7 +1406,7 @@ class PasswordVault:
         if notes:
 
             ctk.CTkLabel(inner, text=notes,
-                          font=ctk.CTkFont(family="Segoe UI", size=10),
+                          font=ui_font(10),
                           text_color=TEXT_TERT, anchor="w",
                           wraplength=400, justify="left").pack(
                 fill="x", pady=(2, 0))
@@ -1212,12 +1417,12 @@ class PasswordVault:
 
     def _toggle_pin(self, entry):
         entry["pinned"] = not entry.get("pinned", False)
-        save_data(self.data, self.key)
+        self._schedule_save()
         self.refresh_entries()
 
     def _save_and_refresh(self):
         """Save data and refresh all views (entries + categories + mini vault)."""
-        save_data(self.data, self.key)
+        self._save_guarded()
         self.refresh_categories()
         self.refresh_entries()
         if (self.mini_vault
@@ -1227,42 +1432,48 @@ class PasswordVault:
             except tk.TclError:
                 pass
 
-    def _copy(self, text, btn):
-
-        self._copy_to_clipboard(text, btn)
-
     def _clear_clipboard(self):
+        """Clear the clipboard, but only if it still holds our value.
+
+        The old unconditional wipe destroyed whatever the user had copied
+        from another app while the timer was pending.
+        """
+        self._clipboard_timer = None
+        expected = self._clipboard_digest
+        self._clipboard_digest = None
+        if expected is None:
+            return
+        try:
+            current = pyperclip.paste()
+        except (OSError, RuntimeError, pyperclip.PyperclipException) as exc:
+            log.warning("Could not read the clipboard: %s", exc)
+            return
+        if not current or password_hash(current) != expected:
+            return
         try:
             pyperclip.copy("")
-        except (OSError, RuntimeError):
-            pass
-        self._clipboard_timer = None
+        except (OSError, RuntimeError, pyperclip.PyperclipException) as exc:
+            log.warning("Could not clear the clipboard: %s", exc)
 
     # ─── Right-Click Context Menu ─────────────────────────────
     def _show_context_menu(self, event, entry, parent=None):
         """Show a right-click context menu for a password entry card."""
         self._reset_idle()
         owner = parent or self.root
-        menu = tk.Menu(owner, tearoff=0,
-                       bg=BG_SEC, fg=TEXT_PRI,
-                       activebackground=ACCENT,
-                       activeforeground="white",
-                       font=("Segoe UI", 10),
-                       relief="flat", bd=1,
-                       selectcolor=ACCENT)
+        menu = tk.Menu(owner, tearoff=0, relief="flat", bd=1,
+                       selectcolor=resolve(ACCENT), **menu_style())
 
         username = entry.get("username", "")
         password = entry.get("password", "")
         url = entry.get("url", "")
-        title = entry.get("title", "")
 
         # ── Copy actions ──
         menu.add_command(
             label="📋  Copy Username",
-            command=lambda: self._ctx_copy(username, "Username"))
+            command=lambda: self._copy_to_clipboard(username))
         menu.add_command(
             label="🔑  Copy Password",
-            command=lambda: self._ctx_copy(password, "Password"))
+            command=lambda: self._copy_to_clipboard(password))
 
         menu.add_separator()
 
@@ -1270,7 +1481,7 @@ class PasswordVault:
         if url:
             menu.add_command(
                 label="🌐  Open URL in Browser",
-                command=lambda: webbrowser.open(url))
+                command=lambda: self._open_url(url))
             menu.add_command(
                 label="🌐  Open URL + Copy Username",
                 command=lambda: self._open_url_with_creds(
@@ -1280,12 +1491,9 @@ class PasswordVault:
                 label="🌐  Open URL in Browser",
                 state="disabled")
 
-        # ── SSH / RDP Session ── only show when the entry looks like a
-        # remote host (URL field is set, or category hints at servers).
-        host = self._extract_host(url, entry)
-        cat = entry.get("category", "").lower()
-        looks_remote = bool(host) or cat in ("server", "vpn", "ssh", "rdp")
-        if looks_remote:
+        # ── SSH / RDP Session ── only for entries that really look like a
+        # remote host, not for every entry that happens to have a URL.
+        if self._looks_remote(entry, url):
             menu.add_separator()
             menu.add_command(
                 label="🖥️  SSH Session …",
@@ -1312,9 +1520,26 @@ class PasswordVault:
         finally:
             menu.grab_release()
 
-    def _ctx_copy(self, text, label=""):
-        """Copy text to clipboard with optional notification."""
-        self._copy_to_clipboard(text)
+    @staticmethod
+    def _looks_remote(entry: dict, url: str) -> bool:
+        """True when the entry plausibly describes a machine to log into.
+
+        Any ordinary web URL yields a hostname, so a hostname alone used to
+        put SSH and RDP actions on webmail entries. A remote host is an
+        explicit ssh/rdp scheme, a bare host or IP with no web scheme, or a
+        server-like category.
+        """
+        if entry.get("category", "").strip().lower() in REMOTE_CATEGORIES:
+            return True
+        raw = (url or "").strip()
+        if not raw:
+            return False
+        scheme = raw.split("://", 1)[0].lower() if "://" in raw else ""
+        if scheme:
+            return scheme in ("ssh", "sftp", "rdp", "telnet", "vnc")
+        # No scheme: a bare "10.0.0.5" or "db01.internal" is a host, while
+        # "example.com/login" is a web address someone typed short.
+        return "/" not in raw and "?" not in raw
 
     @staticmethod
     def _extract_host(url, entry):
@@ -1346,7 +1571,7 @@ class PasswordVault:
         Use the 'Copy Password' menu/button when ready instead.
         """
         self._copy_to_clipboard(username)
-        webbrowser.open(url)
+        self._open_url(url)
 
     # ─── Detect available SSH/RDP clients ────────────────────
     @staticmethod
@@ -1413,7 +1638,7 @@ class PasswordVault:
         height = 480 if is_ssh else 400
         btn_color = GREEN if is_ssh else ACCENT
         btn_hover = GREEN_HOVER if is_ssh else ACCENT_HOVER
-        btn_text_color = BG if is_ssh else "white"
+        btn_text_color = TEXT_ON_GREEN if is_ssh else TEXT_ON_ACCENT
 
         dlg = self._make_dialog(title, 420, height)
 
@@ -1693,7 +1918,7 @@ class PasswordVault:
             pw_row, text="🎲", width=28, height=28,
             font=ctk.CTkFont(size=13),
             fg_color=GREEN, hover_color=GREEN_HOVER, corner_radius=6,
-            text_color=BG,
+            text_color=TEXT_ON_GREEN,
             command=lambda: self._show_generator(pass_e))
         gen_btn.pack(side="right")
         tip(gen_btn, "Open password generator")
@@ -1743,15 +1968,13 @@ class PasswordVault:
                 continue
             op = oe.get("password", "")
             if op:
-                _pw_hash_map[hashlib.sha256(
-                    op.encode()).hexdigest()] = oe.get("title", "?")
+                _pw_hash_map[password_hash(op)] = oe.get("title", "?")
 
         def _check_dup():
             """Duplicate check (runs after debounce delay)."""
             pw = pass_e.get()
             if pw:
-                h = hashlib.sha256(pw.encode()).hexdigest()
-                dupe_title = _pw_hash_map.get(h)
+                dupe_title = _pw_hash_map.get(password_hash(pw))
                 if dupe_title:
                     dup_lbl.configure(
                         text=f"⚠️ Same password used in "
@@ -1791,7 +2014,7 @@ class PasswordVault:
                 width=24, height=24, fg_color=btn_color,
                 hover_color=btn_color, corner_radius=12,
                 font=ctk.CTkFont(size=11, weight="bold"),
-                text_color="white",
+                text_color=TEXT_ON_ACCENT,
                 command=lambda k=ckey: _select_color(k))
             b.pack(side="left", padx=2)
             color_btns[ckey] = b
@@ -1845,7 +2068,7 @@ class PasswordVault:
                     "pinned": False, "created_at": now_iso,
                     "modified_at": now_iso,
                 })
-            save_data(self.data, self.key)
+            self._save_guarded()
             dlg.destroy()
             self.refresh_categories()
             self.refresh_entries()
@@ -1861,6 +2084,20 @@ class PasswordVault:
         save_btn.pack(fill="x")
         tip(save_btn, "Save this password entry")
         dlg.bind("<Control-Return>", lambda _e: save())
+        # Enter submits from any single-line field, the way the smaller
+        # dialogs already behave. The Notes box keeps Enter for newlines.
+        for field in (title_e, url_e, user_e, pass_e):
+            field.bind("<Return>", lambda _e: save())
+        # A CTkTextbox swallows Tab as an indent character, which trapped
+        # keyboard focus in Notes with no way out.
+        def _leave_notes(target):
+            def handler(_event):
+                target.focus_set()
+                return "break"
+            return handler
+
+        notes_tb.bind("<Tab>", _leave_notes(save_btn))
+        notes_tb.bind("<Shift-Tab>", _leave_notes(pass_e))
         title_e.focus()
 
     # ─── Delete Confirm (→ Recycle Bin) ──────────────────────
@@ -1898,22 +2135,25 @@ class PasswordVault:
                     self.data["entries"].remove(entry)
                 except ValueError:
                     pass
-            save_data(self.data, self.key)
+            self._save_guarded()
             dlg.destroy()
             self.refresh_categories()
             self.refresh_entries()
-
 
         ctk.CTkButton(
             bf, text="Delete", fg_color=RED, hover_color=RED_HOVER,
             width=140, height=36, font=ctk.CTkFont(size=13),
             corner_radius=10, command=do_del).pack(side="left", padx=4)
-        ctk.CTkButton(
+        cancel = ctk.CTkButton(
             bf, text="Cancel", fg_color=BG_TERT,
             hover_color=CARD_HOVER, width=140, height=36,
             font=ctk.CTkFont(size=13), corner_radius=10,
-            command=dlg.destroy).pack(side="right", padx=4)
-        dlg.bind("<Return>", lambda _e: do_del())
+            command=dlg.destroy)
+        cancel.pack(side="right", padx=4)
+        # No Return binding on the destructive action: Enter cancels, and
+        # deleting takes a deliberate click.
+        dlg.bind("<Return>", lambda _e: dlg.destroy())
+        cancel.focus()
 
     # ─── Add Category ────────────────────────────────────────
     def show_add_cat_dialog(self):
@@ -1945,7 +2185,7 @@ class PasswordVault:
                 err.configure(text="⚠️ Already exists")
                 return
             self.data["categories"].append(name)
-            save_data(self.data, self.key)
+            self._save_guarded()
             dlg.destroy()
             self.refresh_categories()
 
@@ -2000,6 +2240,7 @@ class PasswordVault:
                 self.restore_window()
 
     def minimize_to_widget(self):
+        self._flush_pending_save()
         self.root.withdraw()
         if not self.floating_widget:
             self.floating_widget = FloatingWidget(self)
@@ -2023,9 +2264,39 @@ class PasswordVault:
         if self.floating_widget:
             self.floating_widget.withdraw()
 
+    def confirm_quit(self):
+        """Ask before exiting; the X button only minimizes, so quitting was
+        previously a single unconfirmed click in the widget menu."""
+        dlg = self._make_dialog("Exit Password Vault", 360, 190)
+        ctk.CTkLabel(dlg, text="🚪", font=ctk.CTkFont(size=30)).pack(
+            pady=(16, 2))
+        ctk.CTkLabel(
+            dlg, text="Exit Password Vault?",
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color=TEXT_PRI).pack()
+        ctk.CTkLabel(
+            dlg, text="The vault will be locked and closed.",
+            font=ctk.CTkFont(size=12), text_color=TEXT_SEC).pack(
+            pady=(4, 12))
+        bf = ctk.CTkFrame(dlg, fg_color="transparent")
+        bf.pack(fill="x", padx=24)
+        ctk.CTkButton(
+            bf, text="Exit", fg_color=RED, hover_color=RED_HOVER,
+            width=140, height=36, font=ctk.CTkFont(size=13),
+            corner_radius=10, command=self.quit_app).pack(
+            side="left", padx=4)
+        cancel = ctk.CTkButton(
+            bf, text="Cancel", fg_color=BG_TERT, hover_color=CARD_HOVER,
+            width=140, height=36, font=ctk.CTkFont(size=13),
+            corner_radius=10, command=dlg.destroy)
+        cancel.pack(side="right", padx=4)
+        dlg.bind("<Return>", lambda _e: dlg.destroy())
+        cancel.focus()
+
     def quit_app(self):
 
         log.info("Application exiting.")
+        self._flush_pending_save()
         try:
             if self._clipboard_timer:
                 self.root.after_cancel(self._clipboard_timer)
@@ -2050,29 +2321,119 @@ class PasswordVault:
         sys.exit(0)
 
     def _center(self, dlg, w, h):
+        """Center *dlg* on the parent, kept fully inside the screen."""
         dlg.update_idletasks()
 
         cx = (self.root.winfo_x()
               + (self.root.winfo_width() // 2) - (w // 2))
         cy = (self.root.winfo_y()
               + (self.root.winfo_height() // 2) - (h // 2))
+        # Clamp to the visible desktop: a parent near an edge, or moved to a
+        # smaller secondary monitor, used to push dialogs partly offscreen.
+        screen_w = dlg.winfo_screenwidth()
+        screen_h = dlg.winfo_screenheight()
+        cx = max(0, min(cx, screen_w - w))
+        cy = max(0, min(cy, screen_h - h))
         dlg.geometry(f"{w}x{h}+{cx}+{cy}")
 
     def _make_dialog(self, title: str, w: int, h: int) -> ctk.CTkToplevel:
         """Create a standard centered modal dialog."""
         self._reset_idle()
+        parent = self._grab_stack[-1] if self._grab_stack else self.root
         dlg = ctk.CTkToplevel(self.root)
         dlg.title(title)
         dlg.geometry(f"{w}x{h}")
-        dlg.resizable(False, False)
+        # Resizable with a floor instead of a fixed size: at Windows display
+        # scaling above 100% the fixed geometry clipped the content.
+        dlg.minsize(w, h)
         dlg.configure(fg_color=BG)
         dlg.transient(self.root)
         dlg.grab_set()
+        self._grab_stack.append(dlg)
         self._center(dlg, w, h)
+
+        def _release_grab(event, dlg=dlg, parent=parent):
+            # The toplevel sits in every child's bindtags, so <Destroy> also
+            # arrives here for each child widget.
+            if event.widget is not dlg:
+                return
+            if dlg in self._grab_stack:
+                self._grab_stack.remove(dlg)
+            # Hand the grab back, otherwise closing a nested dialog left the
+            # dialog underneath it non-modal.
+            top = self._grab_stack[-1] if self._grab_stack else None
+            try:
+                if top is not None and top.winfo_exists():
+                    top.grab_set()
+                elif parent is self.root:
+                    self.root.grab_release()
+            except tk.TclError:
+                pass
+
+        dlg.bind("<Destroy>", _release_grab, add="+")
         # Esc closes the dialog. Individual dialogs may bind <Return> to
         # their primary action (Save/Connect/Confirm).
         dlg.bind("<Escape>", lambda _e: dlg.destroy())
         return dlg
+
+    def _alert(self, title: str, message: str, icon: str = "⚠️") -> None:
+        """Show a short modal notice with a single dismiss button."""
+        dlg = self._make_dialog(title, 360, 190)
+        ctk.CTkLabel(dlg, text=icon, font=ctk.CTkFont(size=30)).pack(
+            pady=(16, 2))
+        ctk.CTkLabel(
+            dlg, text=title,
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color=TEXT_PRI).pack()
+        ctk.CTkLabel(
+            dlg, text=message, font=ctk.CTkFont(size=12),
+            text_color=TEXT_SEC, wraplength=310,
+            justify="center").pack(padx=18, pady=(4, 12))
+        ok = ctk.CTkButton(
+            dlg, text="OK", height=34, width=120,
+            font=ctk.CTkFont(size=12), fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, corner_radius=10,
+            command=dlg.destroy)
+        ok.pack(pady=(0, 14))
+        dlg.bind("<Return>", lambda _e: dlg.destroy())
+        ok.focus()
+
+    def _save_guarded(self) -> bool:
+        """Write the vault, reporting failure instead of raising.
+
+        Returns True on success. A write can fail on a full or read-only
+        disk; letting the exception escape a Tk callback left the change
+        applied in memory with nothing on screen to say it was never
+        persisted. On failure the change is queued so the next flush — on
+        lock, minimize or quit — retries it.
+        """
+        try:
+            save_data(self.data, self.key)
+        except (OSError, ValueError, TypeError) as exc:
+            log.error("Save failed: %s", exc, exc_info=True)
+            self._save_pending = True
+            self._alert(
+                "Could not save",
+                "The vault file could not be written, so this change is "
+                f"only in memory for now.\n\n{exc}")
+            return False
+        return True
+
+    def _open_url(self, url: str) -> None:
+        """Open *url* in the browser, refusing any non-http(s) scheme."""
+        target = safe_url(url)
+        if not target:
+            log.warning("Refused to open unsafe URL scheme.")
+            self._alert(
+                "Link blocked",
+                "This entry's link is not an http or https address, so it "
+                "was not opened.")
+            return
+        try:
+            webbrowser.open(target)
+        except OSError as exc:
+            log.error("Opening the browser failed: %s", exc, exc_info=True)
+            self._alert("Could not open browser", str(exc))
 
     def _copy_to_clipboard(self, text: str, btn=None,
                             force_clear_seconds: int | None = None) -> None:
@@ -2082,7 +2443,15 @@ class PasswordVault:
         If *force_clear_seconds* is set, override the user setting (used by
         SSH/RDP flows that briefly stage the password for paste).
         """
-        pyperclip.copy(text)
+        try:
+            pyperclip.copy(text)
+        except (OSError, RuntimeError, pyperclip.PyperclipException) as exc:
+            # No clipboard backend: a copy button must not take the app down.
+            log.error("Clipboard copy failed: %s", exc)
+            self._alert("Clipboard unavailable",
+                        "This system has no working clipboard, so nothing "
+                        "was copied.")
+            return
         if btn:
             orig = btn.cget("text")
             orig_fg = btn.cget("fg_color")
@@ -2095,6 +2464,9 @@ class PasswordVault:
         if clear_sec > 0:
             if self._clipboard_timer:
                 self.root.after_cancel(self._clipboard_timer)
+            # Only the digest is kept, so the timer never holds a second
+            # plaintext copy of the secret.
+            self._clipboard_digest = password_hash(text) if text else None
             self._clipboard_timer = self.root.after(
                 clear_sec * 1000, self._clear_clipboard)
 
@@ -2107,5 +2479,11 @@ class PasswordVault:
 
 
 if __name__ == "__main__":
+    if not instance_lock.acquire():
+        # A second copy would load its own snapshot of the vault and write it
+        # back in full, discarding whatever the first one saved meanwhile.
+        log.info("Another instance is already running; focusing it.")
+        instance_lock.focus_existing()
+        sys.exit(0)
     PasswordVault().run()
 

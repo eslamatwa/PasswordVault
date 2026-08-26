@@ -7,7 +7,7 @@ from __future__ import annotations
 import tkinter as tk
 import customtkinter as ctk
 
-from ..theme import BG_SEC, ACCENT, TEXT_PRI
+from ..theme import ACCENT, menu_style, resolve
 
 
 class FloatingWidget(ctk.CTkToplevel):
@@ -24,7 +24,8 @@ class FloatingWidget(ctk.CTkToplevel):
         self.canvas = tk.Canvas(self, width=56, height=56, bg="#000001",
                                  highlightthickness=0)
         self.canvas.pack()
-        self.canvas.create_oval(2, 2, 54, 54, fill=ACCENT, outline=ACCENT)
+        accent = resolve(ACCENT)
+        self.canvas.create_oval(2, 2, 54, 54, fill=accent, outline=accent)
         self.canvas.create_text(28, 28, text="🔐",
                                  font=("Segoe UI Emoji", 22))
 
@@ -50,14 +51,18 @@ class FloatingWidget(ctk.CTkToplevel):
             self.app.toggle_mini_vault()
 
     def show_menu(self, e):
-        menu = tk.Menu(self, tearoff=0, bg=BG_SEC, fg=TEXT_PRI,
-                       activebackground=ACCENT, activeforeground="white",
-                       font=("Segoe UI", 10))
+        menu = tk.Menu(self, tearoff=0, **menu_style())
         menu.add_command(label="⬜  Open Full Vault",
                           command=self.app.restore_window)
         menu.add_command(label="📋  Mini Vault",
                           command=self.app.toggle_mini_vault)
         menu.add_separator()
-        menu.add_command(label="✕  Exit", command=self.app.quit_app)
+        menu.add_command(label="✕  Exit", command=self._exit)
         menu.post(e.x_root, e.y_root)
+
+    def _exit(self):
+        """Confirm first: the vault is hidden here, so a stray click on Exit
+        used to close everything with no warning."""
+        self.app.restore_window()
+        self.app.confirm_quit()
 

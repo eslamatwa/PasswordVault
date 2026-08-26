@@ -8,8 +8,8 @@ import unittest
 from unittest import mock
 
 try:
-    from cryptography.fernet import Fernet  # noqa: F401
-    _HAS_CRYPTO = True
+    from cryptography.fernet import Fernet
+    _HAS_CRYPTO = Fernet is not None
 except BaseException:  # noqa: BLE001 - cryptography may panic via pyo3
     _HAS_CRYPTO = False
 
@@ -40,6 +40,21 @@ class CryptoTests(unittest.TestCase):
         self.assertEqual(len(salt1), 32)
         salt2 = self.crypto.get_or_create_salt()
         self.assertEqual(salt1, salt2, "salt should persist across calls")
+
+    def test_read_salt_missing_returns_none(self):
+        self.assertIsNone(self.crypto.read_salt())
+
+    def test_read_salt_matches_stored_value(self):
+        salt = self.crypto.get_or_create_salt()
+        self.assertEqual(self.crypto.read_salt(), salt)
+
+    def test_rotate_salt_can_be_undone_with_read_salt(self):
+        original = self.crypto.get_or_create_salt()
+        previous = self.crypto.read_salt()
+        self.crypto.rotate_salt(b"\x09" * 32)
+        self.assertNotEqual(self.crypto.read_salt(), original)
+        self.crypto.rotate_salt(previous)
+        self.assertEqual(self.crypto.read_salt(), original)
 
     def test_derive_key_deterministic(self):
         salt = b"\x00" * 32
@@ -82,6 +97,56 @@ class CryptoTests(unittest.TestCase):
         # Pre-migration backup should exist
         self.assertTrue(
             os.path.exists(self.crypto.DATA_FILE + ".pre-migration.bak"))
+
+    def test_missing_vault_returns_a_default_structure(self):
+        key = self.crypto.derive_key("pw", b"\x03" * 32)
+        data = self.crypto.load_data(key)
+        self.assertEqual(data["entries"], [])
+        self.assertEqual(data["trash"], [])
+        self.assertIn("General", data["categories"])
+
+    def test_oversized_vault_is_refused_before_decrypting(self):
+        key = self.crypto.derive_key("pw", self.crypto.get_or_create_salt())
+        self.crypto.save_data({"entries": [], "trash": [],
+                               "categories": ["General"]}, key)
+        with mock.patch.object(
+                self.crypto.os.path, "getsize",
+                return_value=self.crypto.MAX_VAULT_BYTES + 1):
+            with self.assertRaises(ValueError):
+                self.crypto.load_data(key)
+
+    def test_expired_trash_is_dropped_and_recent_trash_is_kept(self):
+        import datetime
+        from password_vault.settings import TRASH_DAYS
+        key = self.crypto.derive_key("pw", self.crypto.get_or_create_salt())
+        now = datetime.datetime.now()
+        old = (now - datetime.timedelta(days=TRASH_DAYS + 1)).isoformat()
+        recent = (now - datetime.timedelta(days=1)).isoformat()
+        self.crypto.save_data(
+            {"categories": ["General"], "entries": [],
+             "trash": [{"id": "old", "deleted_at": old},
+                       {"id": "recent", "deleted_at": recent}]}, key)
+
+        loaded = self.crypto.load_data(key)
+
+        self.assertEqual([t["id"] for t in loaded["trash"]], ["recent"])
+
+    def test_trash_purge_is_not_written_back_on_load(self):
+        # The filter runs on every load, so persisting it would re-encrypt
+        # the whole vault at every startup.
+        import datetime
+        from password_vault.settings import TRASH_DAYS
+        key = self.crypto.derive_key("pw", self.crypto.get_or_create_salt())
+        old = (datetime.datetime.now()
+               - datetime.timedelta(days=TRASH_DAYS + 1)).isoformat()
+        self.crypto.save_data(
+            {"categories": ["General"], "entries": [],
+             "trash": [{"id": "old", "deleted_at": old}]}, key)
+        before = os.path.getmtime(self.crypto.DATA_FILE)
+
+        self.crypto.load_data(key)
+
+        self.assertEqual(os.path.getmtime(self.crypto.DATA_FILE), before)
 
 
 class PasswordStrengthTests(unittest.TestCase):

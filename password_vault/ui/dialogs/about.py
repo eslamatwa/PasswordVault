@@ -7,7 +7,7 @@ import customtkinter as ctk
 from ... import APP_VERSION, APP_AUTHOR
 from ...theme import (
     ACCENT, BG_TERT, CARD_HOVER, SEPARATOR,
-    TEXT_PRI, TEXT_SEC,
+    TEXT_PRI, TEXT_SEC, TEXT_ON_ACCENT,
 )
 from ..widgets import ios_group
 
@@ -33,7 +33,7 @@ def show(app) -> None:
     ctk.CTkLabel(ver_frame, text=f"  v{APP_VERSION}  ",
                   font=ctk.CTkFont(family="Segoe UI", size=11,
                                     weight="bold"),
-                  text_color="white").pack(padx=8, pady=2)
+                  text_color=TEXT_ON_ACCENT).pack(padx=8, pady=2)
 
     g = ios_group(dlg, "Information")
 

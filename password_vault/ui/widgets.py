@@ -4,14 +4,86 @@ Reusable UI widgets: Tooltip, iOS-style form helpers, search bar.
 
 from __future__ import annotations
 
+import functools
 import tkinter as tk
 import customtkinter as ctk
 
 from ..theme import (
     BG_GROUP, BG_SEC, BG_TERT, SEPARATOR, ACCENT, ACCENT_HOVER,
     INPUT_BG, TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
-    TT_BG, TT_FG, cat_emoji,
+    TT_BG, TT_FG, cat_emoji, menu_style, resolve,
 )
+
+
+# ─── Shared Fonts ────────────────────────────────────────────
+@functools.lru_cache(maxsize=None)
+def ui_font(size: int = 12, weight: str = "normal",
+            family: str | None = "Segoe UI") -> ctk.CTkFont:
+    """Return a cached CTkFont for (size, weight, family).
+
+    Every CTkFont instance registers itself with CustomTkinter's font
+    manager, so creating one per widget inside a list-rendering loop costs
+    thousands of objects for a large vault. Fonts are immutable here, so a
+    single instance is safely shared by every widget that needs it.
+    """
+    if family:
+        return ctk.CTkFont(family=family, size=size, weight=weight)
+    return ctk.CTkFont(size=size, weight=weight)
+
+
+def modal_child(parent, win) -> None:
+    """Make *win* modal over *parent* and hand the grab back on close.
+
+    Tk keeps a single grab per display, so a nested dialog taking one left
+    the dialog underneath it non-modal after the child closed.
+    """
+    win.transient(parent)
+    win.grab_set()
+
+    def _restore(event):
+        # The toplevel is in every child's bindtags, so <Destroy> also
+        # arrives here for each child widget.
+        if event.widget is not win:
+            return
+        try:
+            if parent.winfo_exists():
+                parent.grab_set()
+        except tk.TclError:
+            pass
+
+    win.bind("<Destroy>", _restore, add="+")
+
+
+_SEARCH_FIELDS = ("title", "username", "url", "category", "notes")
+
+
+def filter_entries(entries: list[dict], category: str,
+                   query: str) -> list[dict]:
+    """Filter *entries* by category and free-text *query*.
+
+    Shared by the main window and the Mini Vault so the same query cannot
+    return different results in the two places.
+    """
+    if category and category != "All":
+        entries = [e for e in entries if e.get("category") == category]
+    query = (query or "").strip().lower()
+    if not query:
+        return entries
+    return [e for e in entries
+            if any(query in str(e.get(f, "")).lower()
+                   for f in _SEARCH_FIELDS)]
+
+
+def elide(text: str, limit: int) -> str:
+    """Shorten *text* to *limit* characters with a trailing ellipsis.
+
+    Card headers are single-line rows: an over-long title used to push the
+    category badge and the action buttons out of the card.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit - 1].rstrip() + "…"
 
 
 # ─── Tooltip System ──────────────────────────────────────────
@@ -27,6 +99,7 @@ class Tooltip:
         widget.bind("<Enter>", self._on_enter, add="+")
         widget.bind("<Leave>", self._on_leave, add="+")
         widget.bind("<Button>", self._on_leave, add="+")
+        widget.bind("<Destroy>", self._on_leave, add="+")
 
     def _on_enter(self, event=None):
         self._cancel()
@@ -38,7 +111,10 @@ class Tooltip:
 
     def _cancel(self):
         if self._after_id:
-            self.widget.after_cancel(self._after_id)
+            try:
+                self.widget.after_cancel(self._after_id)
+            except (tk.TclError, ValueError):
+                pass
             self._after_id = None
 
     def _show(self):
@@ -54,10 +130,11 @@ class Tooltip:
         self._tip_window = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.attributes("-topmost", True)
-        tw.configure(bg=TT_BG)
-        frame = tk.Frame(tw, bg=TT_BG, padx=10, pady=5)
+        bg, fg = resolve(TT_BG), resolve(TT_FG)
+        tw.configure(bg=bg)
+        frame = tk.Frame(tw, bg=bg, padx=10, pady=5)
         frame.pack()
-        tk.Label(frame, text=self.text, bg=TT_BG, fg=TT_FG,
+        tk.Label(frame, text=self.text, bg=bg, fg=fg,
                  font=("Segoe UI", 10), wraplength=220, justify="left").pack()
         tw.update_idletasks()
         tw_w = tw.winfo_reqwidth()
@@ -72,7 +149,10 @@ class Tooltip:
 
     def _hide(self):
         if self._tip_window:
-            self._tip_window.destroy()
+            try:
+                self._tip_window.destroy()
+            except tk.TclError:
+                pass
             self._tip_window = None
         if Tooltip._active is self:
             Tooltip._active = None
@@ -212,9 +292,7 @@ def make_search_bar(parent, search_var, categories, on_category,
     frame._entry = entry  # store reference for focus shortcut
 
     def show_cat_menu():
-        menu = tk.Menu(frame, tearoff=0, bg=BG_SEC, fg=TEXT_PRI,
-                       activebackground=ACCENT, activeforeground="white",
-                       font=("Segoe UI", 10))
+        menu = tk.Menu(frame, tearoff=0, **menu_style())
         menu.add_command(label="🗂️  All",
                           command=lambda: on_category("All"))
         menu.add_separator()

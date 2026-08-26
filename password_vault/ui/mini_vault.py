@@ -5,20 +5,29 @@ Mini Vault — compact always-on-top password viewer.
 from __future__ import annotations
 
 import tkinter as tk
-import webbrowser
 import customtkinter as ctk
-import pyperclip
 
 from ..theme import (
-    BG, BG_SEC, BG_TERT, ACCENT, ACCENT_HOVER, GREEN,
+    BG, BG_SEC, BG_TERT, ACCENT, ACCENT_HOVER,
     RED_HOVER, CARD_HOVER, TEAL, TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
-    CARD_COLORS, cat_emoji, SEPARATOR,
+    TEXT_ON_ACCENT, CARD_COLORS, cat_emoji, menu_style,
 )
 from ..security import password_age_text
 from .widgets import (
-    make_search_bar, tip, safe_cfg, bind_right_click_recursive,
-    add_color_strip, sort_entries_pinned_first,
+    make_search_bar, tip, bind_right_click_recursive,
+    add_color_strip, sort_entries_pinned_first, ui_font, elide,
+    filter_entries,
 )
+
+# The Mini Vault card is narrower than the main one, so titles elide sooner.
+TITLE_MAX_CHARS = 26
+
+# Cards rendered per pass. The window is small, so a short page keeps
+# keystroke-to-repaint fast on a large vault.
+MINI_PAGE_SIZE = 40
+
+# Idle time before a search keystroke triggers a rebuild.
+SEARCH_DEBOUNCE_MS = 300
 
 
 class MiniVault(ctk.CTkToplevel):
@@ -26,6 +35,8 @@ class MiniVault(ctk.CTkToplevel):
         super().__init__()
         self.app = app
         self._mini_cat = "All"
+        self._search_after_id = None
+        self._visible_limit = MINI_PAGE_SIZE
         self.title("Mini Vault")
         self.geometry("340x420")
         self.overrideredirect(True)
@@ -64,7 +75,8 @@ class MiniVault(ctk.CTkToplevel):
 
         # Search
         self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._refresh())
+        self.search_var.trace_add("write",
+                                   lambda *_: self._debounced_refresh())
         search = make_search_bar(
             self, self.search_var,
             lambda: (self.app.data.get("categories", [])
@@ -86,8 +98,24 @@ class MiniVault(ctk.CTkToplevel):
     # helpers
     def _set_cat(self, cat):
         self._mini_cat = cat
+        self._visible_limit = MINI_PAGE_SIZE
         self._cat_label.configure(
             text=f"📁 {cat}" if cat != "All" else "")
+        self._refresh()
+
+    def _debounced_refresh(self):
+        """Rebuild once the user stops typing, not on every keystroke."""
+        if self._search_after_id:
+            try:
+                self.after_cancel(self._search_after_id)
+            except (tk.TclError, ValueError):
+                pass
+        self._search_after_id = self.after(
+            SEARCH_DEBOUNCE_MS, self._refresh_from_search)
+
+    def _refresh_from_search(self):
+        self._search_after_id = None
+        self._visible_limit = MINI_PAGE_SIZE
         self._refresh()
 
     def _start_drag(self, event):
@@ -111,34 +139,35 @@ class MiniVault(ctk.CTkToplevel):
             w.destroy()
         if not self.app.data:
             return
-        search = self.search_var.get().lower()
-        entries = list(self.app.data.get("entries", []))
-        if self._mini_cat != "All":
-            entries = [e for e in entries
-                       if e.get("category") == self._mini_cat]
-        if search:
-            entries = [e for e in entries
-                       if search in e.get("title", "").lower()
-                       or search in e.get("username", "").lower()
-                       or search in e.get("url", "").lower()
-                       or search in e.get("notes", "").lower()]
+        entries = filter_entries(
+            self.app.data.get("entries", []), self._mini_cat,
+            self.search_var.get())
         entries = sort_entries_pinned_first(entries)
         if not entries:
             ctk.CTkLabel(self.list_frame, text="No results",
-                          font=ctk.CTkFont(size=12),
+                          font=ui_font(12, family=None),
                           text_color=TEXT_TERT).pack(pady=40)
             return
-        for entry in entries:
+        for entry in entries[:self._visible_limit]:
             self._mini_card(entry)
+        hidden = len(entries) - self._visible_limit
+        if hidden > 0:
+            more = ctk.CTkButton(
+                self.list_frame,
+                text=f"⬇  Show more  ({hidden})",
+                height=28, font=ui_font(10),
+                fg_color=BG_SEC, hover_color=BG_TERT, corner_radius=6,
+                text_color=TEXT_SEC, command=self._show_more)
+            more.pack(fill="x", padx=2, pady=(4, 6))
+
+    def _show_more(self):
+        self._visible_limit += MINI_PAGE_SIZE
+        self._refresh()
 
     def _show_mini_context_menu(self, event, entry):
         """Show right-click context menu directly in Mini Vault."""
-        menu = tk.Menu(self, tearoff=0,
-                       bg=BG_SEC, fg=TEXT_PRI,
-                       activebackground=ACCENT,
-                       activeforeground="white",
-                       font=("Segoe UI", 10),
-                       relief="flat", bd=1)
+        menu = tk.Menu(self, tearoff=0, relief="flat", bd=1,
+                       **menu_style())
 
         username = entry.get("username", "")
         password = entry.get("password", "")
@@ -155,19 +184,17 @@ class MiniVault(ctk.CTkToplevel):
         if url:
             menu.add_command(
                 label="🌐  Open URL in Browser",
-                command=lambda: webbrowser.open(url))
+                command=lambda: self.app._open_url(url))
             menu.add_command(
                 label="🌐  Open URL + Copy Username",
-                command=lambda: (pyperclip.copy(username),
-                                 webbrowser.open(url)))
+                command=lambda: (self._mini_copy_text(username),
+                                 self.app._open_url(url)))
         else:
             menu.add_command(label="🌐  Open URL in Browser",
                              state="disabled")
 
         # SSH / RDP only when the entry looks like a remote host.
-        host = self.app._extract_host(url, entry)
-        cat = entry.get("category", "").lower()
-        if host or cat in ("server", "vpn", "ssh", "rdp"):
+        if self.app._looks_remote(entry, url):
             menu.add_separator()
             menu.add_command(
                 label="🖥️  SSH Session …",
@@ -221,24 +248,26 @@ class MiniVault(ctk.CTkToplevel):
 
         pin_icon = "📌 " if entry.get("pinned") else ""
         emoji = cat_emoji(entry.get("category", ""))
-        ctk.CTkLabel(title_row,
-                      text=f"{pin_icon}{emoji}  {entry.get('title', '')}",
-                      font=ctk.CTkFont(family="Segoe UI", size=12,
-                                        weight="bold"),
-                      text_color=TEXT_PRI, anchor="w").pack(
-            side="left", fill="x", expand=True)
+        full_title = entry.get("title", "")
+        title_lbl = ctk.CTkLabel(
+            title_row,
+            text=f"{pin_icon}{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
+            font=ui_font(12, "bold"), text_color=TEXT_PRI, anchor="w")
+        title_lbl.pack(side="left", fill="x", expand=True)
+        if len(full_title) > TITLE_MAX_CHARS:
+            tip(title_lbl, full_title)
 
         # Age
         age_t, age_c = password_age_text(
             entry.get("modified_at") or entry.get("created_at"))
         if age_t:
             ctk.CTkLabel(title_row, text=age_t,
-                          font=ctk.CTkFont(size=9),
+                          font=ui_font(9, family=None),
                           text_color=age_c).pack(side="right")
 
         if entry.get("username"):
             ctk.CTkLabel(inner, text=entry.get("username", ""),
-                          font=ctk.CTkFont(family="Segoe UI", size=10),
+                          font=ui_font(10),
                           text_color=TEXT_SEC, anchor="w").pack(
                 fill="x", pady=(1, 4))
         else:
@@ -250,7 +279,7 @@ class MiniVault(ctk.CTkToplevel):
 
         cp_user = ctk.CTkButton(
             btn_row, text="📋 User", height=24, width=70,
-            font=ctk.CTkFont(family="Segoe UI", size=10),
+            font=ui_font(10),
             fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
             text_color=TEXT_PRI,
             command=lambda: self._mini_copy(entry.get("username", ""),
@@ -260,9 +289,9 @@ class MiniVault(ctk.CTkToplevel):
 
         cp_pass = ctk.CTkButton(
             btn_row, text="🔑 Pass", height=24, width=70,
-            font=ctk.CTkFont(family="Segoe UI", size=10),
+            font=ui_font(10),
             fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=6,
-            text_color="white",
+            text_color=TEXT_ON_ACCENT,
             command=lambda: self._mini_copy(entry.get("password", ""),
                                             cp_pass))
         cp_pass.pack(side="left", padx=(0, 4))
@@ -273,16 +302,16 @@ class MiniVault(ctk.CTkToplevel):
         if url:
             url_btn = ctk.CTkButton(
                 btn_row, text="🌐", height=24, width=30,
-                font=ctk.CTkFont(size=11),
+                font=ui_font(11, family=None),
                 fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
                 text_color=TEAL,
-                command=lambda u=url: webbrowser.open(u))
+                command=lambda u=url: self.app._open_url(u))
             url_btn.pack(side="left", padx=(0, 4))
             tip(url_btn, f"Open {url}")
 
         edit_btn = ctk.CTkButton(
             btn_row, text="✏️", height=24, width=36,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
+            font=ui_font(11),
             fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
             text_color=TEXT_SEC,
             command=lambda: self._mini_edit(entry))
@@ -299,9 +328,8 @@ class MiniVault(ctk.CTkToplevel):
         self.app.show_entry_dialog(entry)
 
     def _mini_copy(self, text, btn):
-        self.app._copy_to_clipboard(text)
-        orig = btn.cget("text")
-        orig_fg = btn.cget("fg_color")
-        btn.configure(text="✅ Copied!", fg_color=GREEN)
-        self.after(1000, lambda: safe_cfg(btn, orig, orig_fg))
+        # The app helper owns both the flash restore timer and the clipboard
+        # auto-clear schedule; duplicating them here leaked uncancelled
+        # callbacks onto destroyed buttons.
+        self.app._copy_to_clipboard(text, btn)
 

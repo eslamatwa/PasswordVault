@@ -1,5 +1,5 @@
 ================================================================
-       Password Vault v3.2 — Feature List
+       Password Vault v3.4 — Feature List
        Developer: Eslam Atwa
 ================================================================
 
@@ -17,17 +17,42 @@ SECURITY
   * Master Password Validation — minimum 8 chars, uppercase, lowercase, digits
   * Constant-Time Comparison — prevents timing attacks on master password
   * Input Sanitization — SSH/RDP inputs sanitized to prevent command injection
+  * Single Instance Lock — one running copy only, so two windows cannot
+    overwrite each other's vault
+  * Security Dashboard — vault score plus weak, reused and stale password lists
+  * Breach Check — Have I Been Pwned lookup by hash prefix only; no password
+    or full hash ever leaves the machine
+  * Encrypted Backup & Restore — separately-encrypted backup file, restorable
+    even from the login screen
+  * Consistent Restore — a failed restore puts the previous salt back, so the
+    vault always stays openable
+  * Safe Export — CSV/Excel cells are escaped against formula injection
+  * Link Guard — only http and https URLs are opened
+  * Lock Hygiene — auto-lock closes every open dialog, leaving no plaintext
+    on screen
+  * Master Password Change — re-encrypts the vault and rotates the salt
 
 
 USER INTERFACE
 --------------
-  * Apple Dark Mode Style — sleek, modern UI with iOS-inspired design
+  * Light & Dark Themes — full iOS-inspired palettes, switchable in Settings
   * Card Color Customization — 9 color presets (Blue, Green, Red, Orange, Purple, Teal, Yellow, Pink)
   * Default Card Color — set a default in Settings for all new entries
   * Password Strength Meter — real-time visual indicator (Very Weak -> Very Strong)
   * Tooltips — hover descriptions on all buttons and features
   * Category Emoji Icons — automatic emoji per category (Social, Work, Banking, etc.)
   * Show/Hide Password — toggle visibility on login and in edit dialog
+  * Fixed-Width Masking — a hidden password's width says nothing about its length
+
+
+KEYBOARD
+--------
+  * Ctrl+N — new password        Ctrl+F — focus search
+  * Ctrl+L — lock vault          Ctrl+E / Ctrl+I — export / import
+  * Enter — submit the focused dialog
+  * Esc — close a dialog, or clear the search box
+  * Shortcuts and Ctrl+C/V/X/A match the physical key, so they keep working
+    under a non-Latin keyboard layout (Arabic, Russian, etc.)
 
 
 PASSWORD MANAGEMENT
@@ -93,16 +118,23 @@ SETTINGS
       - Clear Clipboard: Off, or 10, 15, 30, 60 sec
       - Default Password Length: 6-40 characters
       - Character Types: Uppercase / Lowercase / Digits / Symbols
+      - Theme: Light or Dark
       - Default Card Color
       - Start Minimized option
   * All settings saved to %APPDATA%\PasswordVault\settings.json
+  * Validated on load — a wrong type or out-of-range value falls back to the
+    default instead of breaking startup
 
 
 IMPORT & EXPORT
 ---------------
   * Export to CSV or Excel (XLSX)
-  * Import from CSV or Excel
+  * Import from CSV or Excel, with a preview and a skip-duplicates option
+  * Round-trips categories, URLs, notes, timestamps and pinned state
+  * Exported cells are escaped against spreadsheet formula injection
   * Data stays encrypted at rest — export is plaintext (use with care)
+  * Encrypted Backup — for a copy that stays encrypted, use Encrypted Backup
+    instead of CSV/Excel export
 
 
 INSTALLER

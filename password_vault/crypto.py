@@ -37,6 +37,10 @@ DATA_FILE = os.path.join(DATA_DIR, "vault.dat")
 SALT_FILE = os.path.join(DATA_DIR, "vault.salt")
 APP_DIR = _EXE_DIR
 
+# Upper bound for files we are willing to read into memory. A real vault is
+# a few hundred KB; anything at this scale is corruption or a hostile file.
+MAX_VAULT_BYTES = 64 * 1024 * 1024
+
 
 def _restrict_file(path: str) -> None:
     """Set restrictive permissions on *path* (owner read/write only)."""
@@ -76,6 +80,19 @@ def get_or_create_salt() -> bytes:
     _restrict_file(SALT_FILE)
     log.info("New salt generated (%d bytes).", len(salt))
     return salt
+
+
+def read_salt() -> bytes | None:
+    """Return the stored salt, or None when no vault has been created yet.
+
+    Unlike :func:`get_or_create_salt` this never writes, so a caller that
+    has to undo a rotation can capture the previous value first.
+    """
+    try:
+        with open(SALT_FILE, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def rotate_salt(salt: bytes | None = None) -> bytes:
@@ -142,6 +159,11 @@ def load_data(key: bytes) -> dict:
     if not os.path.exists(DATA_FILE):
         return {"categories": ["General", "Social", "Work", "Banking"],
                 "entries": [], "trash": []}
+    size = os.path.getsize(DATA_FILE)
+    if size > MAX_VAULT_BYTES:
+        log.error("Vault file is implausibly large (%d bytes); refusing to "
+                  "load.", size)
+        raise ValueError("Vault file is too large to be valid.")
     with open(DATA_FILE, "rb") as f:
         data = decrypt_data(f.read(), key)
     schema_changed = False  # only true for structural upgrades, not trash GC
@@ -178,15 +200,16 @@ def load_data(key: bytes) -> dict:
             except OSError as exc:
                 log.warning("Pre-migration backup failed: %s", exc)
 
-    # Auto-clean trash older than TRASH_DAYS
+    # Auto-clean trash older than TRASH_DAYS. This is applied to the
+    # in-memory copy only: the filter runs on every load anyway, so writing
+    # it back would re-encrypt the whole vault at every startup for no
+    # observable gain. The next user-initiated save persists it.
     cutoff = (datetime.datetime.now()
               - datetime.timedelta(days=TRASH_DAYS)).isoformat()
-    before = len(data["trash"])
     data["trash"] = [t for t in data["trash"]
                      if t.get("deleted_at", "") > cutoff]
-    trash_changed = len(data["trash"]) != before
 
-    if schema_changed or trash_changed:
+    if schema_changed:
         save_data(data, key)
     return data
 
@@ -262,6 +285,14 @@ def import_encrypted_backup(filepath: str,
         ValueError if the file is not a recognized backup or the
         password is wrong.
     """
+    # The user picks this file, so treat it like any other untrusted input:
+    # a real backup is a few hundred KB, and json.load would otherwise pull
+    # an arbitrarily large file into memory before rejecting it.
+    size = os.path.getsize(filepath)
+    if size > MAX_VAULT_BYTES:
+        log.error("Backup file is implausibly large (%d bytes); refusing to "
+                  "read.", size)
+        raise ValueError("Backup file is too large to be valid.")
     with open(filepath, "r", encoding="utf-8") as f:
         try:
             payload = json.load(f)

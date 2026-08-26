@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import tkinter as tk
+
 import customtkinter as ctk
 
 from ...security import calculate_security_score, check_hibp_batch
 from ...settings import PASSWORD_AGE_WARNING
 from ...theme import (
-    BG_TERT, CARD_HOVER, GREEN, ORANGE, PURPLE, RED, SEPARATOR,
+    BG_TERT, CARD_HOVER, GREEN, ORANGE, PURPLE, PURPLE_HOVER, RED, SEPARATOR,
     TEXT_PRI, TEXT_SEC,
 )
 from ..widgets import ios_group, tip
+
+# Breached entries listed inline; the rest are summarised as a count.
+MAX_LISTED_BREACHES = 15
 
 
 def show(app) -> None:
@@ -117,7 +122,11 @@ def show(app) -> None:
     breach_result.pack(padx=12, pady=(0, 8))
 
     def start_breach():
-        if not entries:
+        # Re-read the vault: it may have been edited since the dialog opened,
+        # and checking a stale snapshot would report on entries that are
+        # gone and miss the ones just added.
+        current = list(app.data.get("entries", []))
+        if not current:
             breach_result.configure(
                 text="No entries to check.", text_color=TEXT_SEC)
             return
@@ -126,21 +135,45 @@ def show(app) -> None:
             text="Checking passwords against HIBP database...",
             text_color=TEXT_SEC)
 
+        def _alive() -> bool:
+            """The check runs in a worker; the dialog may already be gone."""
+            try:
+                return bool(dlg.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def on_progress(done, total):
+            def _tick():
+                if not _alive():
+                    return
+                breach_result.configure(
+                    text=f"Checking passwords… {done}/{total}",
+                    text_color=TEXT_SEC)
+
+            app.root.after(0, _tick)
+
         def on_done(results):
             def _update():
+                if not _alive():
+                    return
                 breached = {eid: c for eid, c in results.items()
                             if c > 0}
                 errors = sum(1 for c in results.values() if c < 0)
                 if breached:
                     names = []
-                    for e in entries:
+                    for e in current:
                         if e.get("id") in breached:
                             names.append(
                                 f"  ⛔ {e.get('title', '?')} "
                                 f"({breached[e['id']]:,}x)")
+                    # One unbounded label broke the layout on a big vault.
+                    listed = names[:MAX_LISTED_BREACHES]
+                    if len(names) > MAX_LISTED_BREACHES:
+                        listed.append(
+                            f"  … and {len(names) - MAX_LISTED_BREACHES} more")
                     txt = (f"🚨 {len(breached)} password(s) "
                            f"found in breaches!\n"
-                           + "\n".join(names))
+                           + "\n".join(listed))
                     breach_result.configure(text=txt, text_color=RED)
                 else:
                     txt = "✅ No passwords found in breaches!"
@@ -153,12 +186,12 @@ def show(app) -> None:
 
             app.root.after(0, _update)
 
-        check_hibp_batch(entries, None, on_done)
+        check_hibp_batch(current, on_progress, on_done)
 
     breach_btn = ctk.CTkButton(
         g3, text="🔍  Check Breaches", height=34,
         font=ctk.CTkFont(size=12, weight="bold"),
-        fg_color=PURPLE, hover_color="#a04ad0",
+        fg_color=PURPLE, hover_color=PURPLE_HOVER,
         corner_radius=8, command=start_breach)
     breach_btn.pack(padx=12, pady=(0, 10))
     tip(breach_btn,
