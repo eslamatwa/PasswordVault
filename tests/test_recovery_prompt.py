@@ -149,7 +149,9 @@ def test_creating_a_backup_records_when(app, tmp_path, monkeypatch):
     # The export runs off the Tk thread and marshals back with after(),
     # which needs the main loop.
     import time
-    deadline = time.time() + 30
+    # Generous on purpose: this catches a hung worker, and asserts nothing
+    # about how fast the encryption is.
+    deadline = time.time() + 120
 
     def poll():
         if app.settings.get("last_backup_at") or time.time() > deadline:

@@ -113,6 +113,49 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **The entry list is 36x faster.** A repaint used to cost about a quarter
+  of a second per row, on the surface that repaints on startup, on every
+  settled search keystroke, on a category switch, and after every add,
+  edit, delete and pin. A sixty-entry vault took fifteen seconds.
+
+  | entries | before | after |
+  |---------|--------|-------|
+  | 5       | 1.5 s  | 0.16 s |
+  | 10      | 2.8 s  | 0.30 s |
+  | 20      | 5.1 s  | 0.41 s |
+  | 60      | 15.3 s | 0.42 s |
+  | 100     | 15.2 s | 0.38 s |
+
+  Three changes, in the order they were measured. *Cheaper rows*: a
+  CustomTkinter widget draws itself onto its own canvas, which costs 9x a
+  plain `tk.Label` for text and 35-50x for a button or frame; a card was
+  43 of them and is now 14 plain widgets plus the CTkFrame that gives it
+  its rounded tint. *A smaller page*: 60 to 20, sized to a screenful plus
+  headroom. *Reuse*: cards are built once and hidden and shown rather than
+  destroyed and rebuilt, which is what took the last 2 s down to 0.4.
+
+  Nothing about a card's behaviour changed. `icon_button` is a `tk.Label`
+  with hover, a hand cursor and a click binding, and `tip()` layers on top
+  because it binds with `add="+"`. What was lost is the corner radius on
+  the small borderless icons, where at 24px with no fill it was never
+  apparent.
+
+  Three approaches were measured and rejected first: detaching the scroll
+  container while filling it (1%, noise), building the holder loose and
+  attaching it to the canvas afterwards (no consistent difference), and
+  replacing `CTkScrollableFrame` with a hand-rolled canvas scroller (17%).
+  The cost is painting widgets inside a canvas at all — the same cards
+  outside a scroller paint in 654 ms against 3173 ms inside one. Reuse is
+  what gets past that floor, by not doing the work.
+
+  The two prices paid. Plain widgets keep whatever colour they were given,
+  so `_apply_appearance()` repaints the list and the Mini Vault on a mode
+  change. And `refresh_entries` now owns a cache, so every path that
+  changes an entry has to invalidate it — `_card_signature` covers that by
+  comparing everything a card draws, and `tests/test_card_cache.py` tests
+  the invalidation rather than the speed.
+
+  Reproduce any of it with `python tools/benchmark_ui.py`.
 - **A forgotten master password is now stated, once, at creation.** The
   encrypted backup was the only way back into a vault whose password had
   been forgotten — no escrow, no reset, which is the point — but it lived
@@ -274,85 +317,12 @@ later is invisible in English, so the check has to be static.
 
 ## Remaining — large, each needs a decision before starting
 
-### 1. Rendering the entry list — partly done, one step left
+Nothing at this size is outstanding. Rendering the entry list was the last
+one and is in *Done* above. The next candidates, none started:
 
-**Where it stands.** A repaint of the list used to cost about a quarter of
-a second per row, on a surface that repaints on startup, on every settled
-search keystroke, on a category switch, and after every add, edit, delete
-and pin. Rebuilding each row out of plain Tk widgets and capping the page
-at 20 cards brought the worst case down from 15.3 s to 2.0 s:
-
-| entries | before | now |
-|---------|--------|-----|
-| 5       | 1.5 s  | 0.6 s |
-| 10      | 2.8 s  | 1.1 s |
-| 20      | 5.1 s  | 2.0 s |
-| 60      | 15.3 s | 2.0 s |
-| 100     | 15.2 s | 2.0 s |
-
-Reproduce with `python tools/benchmark_ui.py`. Absolute numbers depend on
-the machine; the ratios do not.
-
-**What made the difference.** A CustomTkinter widget draws itself onto its
-own canvas with rounded corners. That is what makes it look right, and it
-costs 9x a plain `tk.Label` for a CTkLabel and 35–50x for a button or
-frame. A card was 43 of them; it is now 14 plain widgets plus the CTkFrame
-that gives the card its rounded tint. Hover, the hand cursor, clicks and
-tooltips all survived — the only thing lost is the corner radius on the
-small borderless icons, where at 24px with no fill it was never apparent.
-
-The cost of that: a plain widget keeps whatever colour it was given and
-will not re-pick a `(light, dark)` pair, so `_apply_appearance()` repaints
-the list and the Mini Vault whenever the mode changes.
-
-**Three things that looked promising and were not.** Each was measured
-rather than reasoned about:
-
-- *Detaching the scroll container while filling it*, the usual remedy for
-  incremental relayout — 1%, which is noise.
-- *Building the card holder loose and attaching it to the canvas after* —
-  no consistent difference across repeated runs.
-- *Replacing `CTkScrollableFrame` with a hand-rolled canvas scroller* —
-  17%. The cost is painting widgets inside a canvas at all, not
-  CustomTkinter's wrapper around it. The same cards outside a scroller
-  paint in 654 ms against 3173 ms inside one.
-
-That last one is the floor, and it is why this stops at 2 s rather than
-going further: with the widgets already as cheap as they get, the only
-way past a floor is to stop doing the work.
-
-**The step that is left: reuse the cards instead of rebuilding them.**
-Measured on 60 cards, replacing destroy-and-rebuild with hide-and-show:
-
-| what happens on a keystroke | cost |
-|-----------------------------|------|
-| rebuild every card (today)  | 5634 ms |
-| re-pack, all 60 still match | 1195 ms |
-| re-pack, 20 of 60 match     | 762 ms |
-| re-pack, 5 of 60 match      | 539 ms |
-
-Between 5x and 10x, and it compounds with what has already landed. The
-work: build a card once per entry and keep it keyed by id; on a refresh
-`pack_forget()` everything and `pack()` the matching subset in sort order;
-rebuild a single card when its entry is edited or its pin toggles; drop
-one when its entry is deleted; rebuild all on a theme or language change.
-About a hundred entries' worth of cards is some 1,400 widgets held in
-memory, which is not a concern.
-
-The reason it is not done yet is that it changes `refresh_entries` from a
-function with no state into one that owns a cache, and every path that
-mutates an entry has to tell it. That wants its own review pass.
-
-**Also still full-price:** the Mini Vault's cards, which are still
-CustomTkinter throughout. Same treatment, smaller surface.
-
-**Acceptance:** `tools/benchmark_ui.py` shows a 20-entry vault repainting
-in under 500 ms; the dialog smoke tests still pass in both themes and both
-languages; and switching theme or language with the list open leaves no
-card in the old palette.
-
-### Other candidates, none started:
-
+- **The Mini Vault's cards** are still CustomTkinter throughout, so they
+  carry the cost the main list just shed. Same treatment, smaller surface,
+  and the helpers are already there.
 - **1Password's 1PUX export** — a zip carrying attachments and item types
   beyond logins. Bitwarden's JSON is now read directly; 1PUX needs archive
   handling and a decision about where attachments would even go, since this

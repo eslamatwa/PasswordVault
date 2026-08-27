@@ -86,12 +86,17 @@ def blank_vault(app, app_crypto):
         clear()
 
 
-def _pump_until(app, predicate, timeout=40):
+def _pump_until(app, predicate, timeout=120):
     """Run Tk's loop until *predicate* holds.
 
     mainloop() rather than update(): the worker marshals its result with
     root.after(), which Tk accepts from another thread only while the main
     thread is inside mainloop — the state the real app is always in.
+
+    The timeout is generous on purpose. It exists to stop a hung worker
+    from wedging the run, not to assert anything about speed: a tighter
+    one made these tests fail late in a loaded suite for the machine's
+    reasons rather than the code's.
     """
     deadline = time.time() + timeout
 

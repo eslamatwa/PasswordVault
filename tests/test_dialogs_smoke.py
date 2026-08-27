@@ -280,6 +280,8 @@ def test_unlock_does_not_block_the_ui_thread(app):
     """
     import time
 
+    from password_vault.crypto import derive_key
+
     app._auto_lock()          # back to the login screen
     app.root.update()
     assert app.key is None
@@ -292,9 +294,25 @@ def test_unlock_does_not_block_the_ui_thread(app):
     started = time.perf_counter()
     app.unlock()
     elapsed = (time.perf_counter() - started) * 1000
-    # The real derivation is ~300ms; anything near that means it ran here.
-    assert elapsed < 100, f"unlock() blocked for {elapsed:.0f}ms"
+
+    # The property is structural: the handler returned while the work was
+    # still outstanding. A fixed millisecond budget was flaky here -- late
+    # in a loaded suite the same non-blocking call can take longer than an
+    # arbitrary threshold, and the test would fail for the machine's
+    # reasons rather than the code's.
     assert app._unlocking, "the busy flag was not set"
+    assert app.key is None, "the derivation finished inside the handler"
+
+    # A calibrated upper bound as well, so a future change that moves the
+    # work back onto this thread is still caught. Both sides feel the same
+    # machine load, which a constant does not.
+    salt = b"0" * 32
+    t0 = time.perf_counter()
+    derive_key("calibration", salt)
+    one_derivation = (time.perf_counter() - t0) * 1000
+    assert elapsed < one_derivation / 2, (
+        f"unlock() took {elapsed:.0f}ms against a {one_derivation:.0f}ms "
+        f"derivation — it looks like it ran here")
 
     # A second submit while the first is in flight must be refused, or two
     # derivations race for the same key.
@@ -305,7 +323,9 @@ def test_unlock_does_not_block_the_ui_thread(app):
     # accepts from another thread while the main thread is inside
     # mainloop() — the state the real app is always in. Polling with
     # update() instead would fail here for a reason the app never hits.
-    deadline = time.time() + 20
+    # Generous: this guards against a hung worker, and asserts
+    # nothing about how fast the derivation is.
+    deadline = time.time() + 120
 
     def poll():
         if not app._unlocking or time.time() > deadline:
