@@ -25,7 +25,7 @@ TITLE_MAX_CHARS = 26
 
 # Cards rendered per pass. The window is small, so a short page keeps
 # keystroke-to-repaint fast on a large vault.
-MINI_PAGE_SIZE = 40
+MINI_PAGE_SIZE = 15
 
 # Idle time before a search keystroke triggers a rebuild.
 SEARCH_DEBOUNCE_MS = 300

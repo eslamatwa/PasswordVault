@@ -274,74 +274,82 @@ later is invisible in English, so the check has to be static.
 
 ## Remaining — large, each needs a decision before starting
 
-### 1. Rendering the entry list — the one that matters
+### 1. Rendering the entry list — partly done, one step left
 
-**The app is not smooth with an ordinary number of entries.** Repainting
-the list takes about a quarter of a second *per row*, and it repaints on
-startup, on every settled search keystroke, on a category switch, and after
-every add, edit, delete and pin.
+**Where it stands.** A repaint of the list used to cost about a quarter of
+a second per row, on a surface that repaints on startup, on every settled
+search keystroke, on a category switch, and after every add, edit, delete
+and pin. Rebuilding each row out of plain Tk widgets and capping the page
+at 20 cards brought the worst case down from 15.3 s to 2.0 s:
 
-Reproduce with `python tools/benchmark_ui.py`. On the machine this was
-measured on:
+| entries | before | now |
+|---------|--------|-----|
+| 5       | 1.5 s  | 0.6 s |
+| 10      | 2.8 s  | 1.1 s |
+| 20      | 5.1 s  | 2.0 s |
+| 60      | 15.3 s | 2.0 s |
+| 100     | 15.2 s | 2.0 s |
 
-| entries | repaint |
-|---------|---------|
-| 5       | 1.5 s   |
-| 10      | 2.8 s   |
-| 20      | 5.1 s   |
-| 40      | 10.0 s  |
-| 60      | 15.3 s  |
+Reproduce with `python tools/benchmark_ui.py`. Absolute numbers depend on
+the machine; the ratios do not.
 
-A faster machine shifts these down, but the shape does not change: the cost
-is linear in the number of cards, and a card is expensive.
+**What made the difference.** A CustomTkinter widget draws itself onto its
+own canvas with rounded corners. That is what makes it look right, and it
+costs 9x a plain `tk.Label` for a CTkLabel and 35–50x for a button or
+frame. A card was 43 of them; it is now 14 plain widgets plus the CTkFrame
+that gives the card its rounded tint. Hover, the hand cursor, clicks and
+tooltips all survived — the only thing lost is the corner radius on the
+small borderless icons, where at 24px with no fill it was never apparent.
 
-**Where it goes.** Not the display, and not the crypto. A control of 1000
-plain `tk.Label`s on the same session paints in 297 ms — 0.30 ms a widget,
-which is healthy. The cost is CustomTkinter's per-widget overhead:
+The cost of that: a plain widget keeps whatever colour it was given and
+will not re-pick a `(light, dark)` pair, so `_apply_appearance()` repaints
+the list and the Mini Vault whenever the mode changes.
 
-| widget      | cost    | vs a plain tk.Label |
-|-------------|---------|---------------------|
-| `tk.Frame`  | 0.01 ms | 0.1x                |
-| `tk.Label`  | 0.10 ms | 1x                  |
-| `CTkLabel`  | 0.92 ms | 9x                  |
-| `CTkButton` | 3.41 ms | 35x                 |
-| `CTkFrame`  | 4.45 ms | 46x                 |
+**Three things that looked promising and were not.** Each was measured
+rather than reasoned about:
 
-A CTk widget draws itself onto its own canvas with rounded corners, which
-is exactly what makes it look right and what makes 43 of them per row cost
-250 ms. Roughly 30% of that is building the widgets and 70% is painting
-them.
+- *Detaching the scroll container while filling it*, the usual remedy for
+  incremental relayout — 1%, which is noise.
+- *Building the card holder loose and attaching it to the canvas after* —
+  no consistent difference across repeated runs.
+- *Replacing `CTkScrollableFrame` with a hand-rolled canvas scroller* —
+  17%. The cost is painting widgets inside a canvas at all, not
+  CustomTkinter's wrapper around it. The same cards outside a scroller
+  paint in 654 ms against 3173 ms inside one.
 
-**Ruled out.** Detaching the scroll container while filling it — the usual
-fix for incremental relayout — changes nothing here (measured at 1%, which
-is noise). The geometry manager is not the bottleneck; the widgets are.
+That last one is the floor, and it is why this stops at 2 s rather than
+going further: with the widgets already as cheap as they get, the only
+way past a floor is to stop doing the work.
 
-**Options, measured on 60 cards:**
+**The step that is left: reuse the cards instead of rebuilding them.**
+Measured on 60 cards, replacing destroy-and-rebuild with hide-and-show:
 
-| approach | 60 cards | what it costs |
-|----------|----------|---------------|
-| today | 11.8 s | — |
-| invisible container frames → `tk.Frame` | 9.9 s (−16%) | nothing visible |
-| ...and text labels → `tk.Label` | 3.3 s (−72%) | icon buttons lose hover and rounded corners |
-| `ENTRIES_PAGE_SIZE` 60 → 20 | first paint 3x faster | "Show more" appears sooner |
-| reuse cards instead of destroy-and-rebuild | not measured | the largest change; a real refactor |
+| what happens on a keystroke | cost |
+|-----------------------------|------|
+| rebuild every card (today)  | 5634 ms |
+| re-pack, all 60 still match | 1195 ms |
+| re-pack, 20 of 60 match     | 762 ms |
+| re-pack, 5 of 60 match      | 539 ms |
 
-**The shared catch.** Plain Tk widgets do not follow the appearance mode on
-their own — that is the whole reason `theme.resolve()` exists for menus and
-tooltips. Any of the first two options means the list must be repainted
-explicitly when the theme changes. That is one call in the Settings theme
-handler, but it is a behaviour change and it is why this needs a decision
-rather than just being done.
+Between 5x and 10x, and it compounds with what has already landed. The
+work: build a card once per entry and keep it keyed by id; on a refresh
+`pack_forget()` everything and `pack()` the matching subset in sort order;
+rebuild a single card when its entry is edited or its pin toggles; drop
+one when its entry is deleted; rebuild all on a theme or language change.
+About a hundred entries' worth of cards is some 1,400 widgets held in
+memory, which is not a concern.
 
-**Recommended:** the second row plus the smaller page size. It reaches
-something that is actually pleasant to use, and the tradeoff is confined to
-the small icon buttons on each card — the ones that are already 24px
-squares — while the cards, dialogs and everything else stay CustomTkinter.
+The reason it is not done yet is that it changes `refresh_entries` from a
+function with no state into one that owns a cache, and every path that
+mutates an entry has to tell it. That wants its own review pass.
+
+**Also still full-price:** the Mini Vault's cards, which are still
+CustomTkinter throughout. Same treatment, smaller surface.
 
 **Acceptance:** `tools/benchmark_ui.py` shows a 20-entry vault repainting
-under 300 ms, the dialog smoke tests still pass in both themes and both
-languages, and switching theme with the list open leaves no card in the
-old palette.
+in under 500 ms; the dialog smoke tests still pass in both themes and both
+languages; and switching theme or language with the list open leaves no
+card in the old palette.
 
 ### Other candidates, none started:
 

@@ -56,6 +56,7 @@ from password_vault.security import (
     password_strength, password_age_text, safe_url, password_hash,
 )
 from password_vault.ui.widgets import (
+    row_frame, row_label, icon_button,
     tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
     bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
     ui_font, elide, filter_entries, dialog_header, button_row,
@@ -68,7 +69,11 @@ log = logging.getLogger("PasswordVault")
 
 # How many entry cards to build per render pass. Tk has no virtualized list,
 # so an unbounded vault would create thousands of widgets on every keystroke.
-ENTRIES_PAGE_SIZE = 60
+# Cards rendered per pass. Painting a widget inside a scroll canvas is
+# the floor this cannot get under, so the page is sized to a screenful
+# plus headroom rather than to a round number: 60 meant a first paint of
+# several seconds on any vault that large.
+ENTRIES_PAGE_SIZE = 20
 
 # Minimum gap between idle-timer reschedules. <Motion> fires dozens of times
 # per second; without this every mouse move cancels and re-arms a Tk timer.
@@ -955,6 +960,29 @@ class PasswordVault:
         self.refresh_entries()
 
 
+    def _apply_appearance(self, mode: str) -> None:
+        """Switch appearance mode and repaint what cannot follow it.
+
+        CustomTkinter re-picks a (light, dark) pair on its own widgets, but
+        the entry list and the Mini Vault are built from plain Tk ones for
+        speed, and a plain widget keeps whatever colour it was given. They
+        have to be rebuilt, which is cheap next to leaving half the window
+        in the previous palette.
+        """
+        ctk.set_appearance_mode(mode)
+        if self._main_frame is not None and self._main_frame.winfo_exists():
+            try:
+                self.refresh_categories()
+                self.refresh_entries()
+            except (tk.TclError, KeyError, TypeError):
+                pass
+        if self.mini_vault is not None:
+            try:
+                if self.mini_vault.winfo_exists():
+                    self.mini_vault._refresh()
+            except tk.TclError:
+                pass
+
     def _rebuild_ui(self):
         """Tear the main window down and build it again.
 
@@ -1262,7 +1290,7 @@ class PasswordVault:
             fg_color=BG_TERT, button_color=ACCENT,
             button_hover_color=ACCENT_HOVER, text_color=TEXT_PRI,
             dropdown_fg_color=BG_SEC, dropdown_text_color=TEXT_PRI,
-            command=lambda choice: ctk.set_appearance_mode(
+            command=lambda choice: self._apply_appearance(
                 theme_labels.get(choice, "Dark")))
         th_opt.pack(side=side_end())
         tip(lbl_th, t("Light, dark, or follow the Windows setting. "
@@ -1331,7 +1359,7 @@ class PasswordVault:
                 return
             # The picker previews immediately; dismissing without saving must
             # not leave the app in a mode that is not stored.
-            ctk.set_appearance_mode(self.settings.get("theme", "Dark"))
+            self._apply_appearance(self.settings.get("theme", "Dark"))
 
         dlg.bind("<Destroy>", _revert_theme_preview, add="+")
 
@@ -1510,11 +1538,26 @@ class PasswordVault:
         self.refresh_entries()
 
     def _card(self, entry):
+        """One row of the entry list.
 
+        Built from plain Tk widgets rather than CustomTkinter ones. A CTk
+        widget draws itself onto its own canvas, which costs 9x a tk.Label
+        for text and 35-46x for a button or frame — fine to pay once in a
+        dialog, but this runs 43 times a row on every search keystroke,
+        category switch, pin, edit and delete. A twenty-entry vault took
+        five seconds to repaint; `tools/benchmark_ui.py` measures it.
+
+        The card itself stays a CTkFrame, because its rounded corners and
+        colour tint are the visible thing. What went is the corner radius
+        on the small borderless icons, where at 24px with no fill it was
+        never apparent. Hover, the hand cursor, clicks and tooltips are all
+        still there.
+        """
         color_key = entry.get("color", "default")
         cc = CARD_COLORS.get(color_key, CARD_COLORS["default"])
+        bg = cc["bg"]
 
-        card = ctk.CTkFrame(self.entries_panel, fg_color=cc["bg"],
+        card = ctk.CTkFrame(self.entries_panel, fg_color=bg,
                               corner_radius=10)
         card.pack(fill="x", pady=2, padx=8)
 
@@ -1523,120 +1566,94 @@ class PasswordVault:
 
         has_strip = add_color_strip(card, cc)
 
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-
-        inner.pack(fill="x", padx=(14 if has_strip else 12), pady=6)
-
+        inner = row_frame(card, bg, fill="x",
+                          padx=(14 if has_strip else 12), pady=6)
 
         # Row 1: Pin + Title + Category badge + Age + Edit + Delete
-        r1 = ctk.CTkFrame(inner, fg_color="transparent")
+        r1 = row_frame(inner, bg, fill="x", pady=(0, 2))
 
-        r1.pack(fill="x", pady=(0, 2))
-
-        # Pin toggle
         is_pinned = entry.get("pinned", False)
-        pin_btn = ctk.CTkButton(
-            r1, text="📌" if is_pinned else "○",
-            width=24, height=24, fg_color="transparent",
-            hover_color=BG_TERT, corner_radius=5,
-            font=ui_font(11 if is_pinned else 9, family=None),
-            text_color=YELLOW if is_pinned else TEXT_QUAT,
-            command=lambda: self._toggle_pin(entry))
-        pin_btn.pack(side=side_start(), padx=pad(0, 2))
+        pin_btn = icon_button(
+            r1, "📌" if is_pinned else "○",
+            lambda: self._toggle_pin(entry),
+            bg=bg, hover=BG_TERT,
+            fg=YELLOW if is_pinned else TEXT_QUAT,
+            font=("Segoe UI Emoji", 11 if is_pinned else 9),
+            side=side_start(), padx=pad(0, 2))
         tip(pin_btn,
             t("Unpin from top") if is_pinned else t("Pin to top"))
 
         emoji = cat_emoji(entry.get("category", ""))
-
         full_title = entry.get("title", "")
-        title_lbl = ctk.CTkLabel(
-            r1, text=f"{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
-            font=ui_font(13, "bold"), text_color=TEXT_PRI)
-        title_lbl.pack(side=side_start())
+        title_lbl = row_label(
+            r1, f"{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
+            bg, TEXT_PRI, font=("Segoe UI", 11, "bold"),
+            side=side_start())
         if len(full_title) > TITLE_MAX_CHARS:
             tip(title_lbl, full_title)
-        ctk.CTkLabel(r1, text=f" {entry.get('category', '')} ",
-                      font=ui_font(9),
-                      text_color=TEXT_SEC, fg_color=BADGE_BG,
-                      corner_radius=4).pack(side=side_start(),
-                                            padx=pad(8, 0))
 
-        # Delete
-        del_btn = ctk.CTkButton(
-            r1, text="🗑", width=24, height=24, fg_color="transparent",
-            hover_color=RED_HOVER, corner_radius=5,
-            font=ui_font(11, family=None),
-            command=lambda: self.confirm_delete(entry))
-        del_btn.pack(side=side_end(), padx=1)
+        # The category badge keeps its own fill, so it stays a tinted
+        # label rather than taking the card colour.
+        badge = tk.Label(r1, text=f" {entry.get('category', '')} ",
+                         font=("Segoe UI", 8), bd=0, highlightthickness=0,
+                         bg=resolve(BADGE_BG), fg=resolve(TEXT_SEC))
+        badge.pack(side=side_start(), padx=pad(8, 0))
+
+        del_btn = icon_button(
+            r1, "🗑", lambda: self.confirm_delete(entry),
+            bg=bg, hover=RED_HOVER, fg=TEXT_SEC,
+            side=side_end(), padx=1)
         tip(del_btn, t("Move to Recycle Bin"))
 
-        # Edit
-        edit_btn = ctk.CTkButton(
-            r1, text="✏", width=24, height=24, fg_color="transparent",
-            hover_color=BG_TERT, corner_radius=5,
-            font=ui_font(11, family=None),
-            command=lambda: self.show_entry_dialog(entry))
-        edit_btn.pack(side=side_end(), padx=1)
+        edit_btn = icon_button(
+            r1, "✏", lambda: self.show_entry_dialog(entry),
+            bg=bg, hover=BG_TERT, fg=TEXT_SEC,
+            side=side_end(), padx=1)
         tip(edit_btn, t("Edit this entry"))
 
-        # Age
         age_t, age_c = password_age_text(
             entry.get("modified_at") or entry.get("created_at"))
         if age_t:
-            ctk.CTkLabel(r1, text=age_t, font=ui_font(9, family=None),
-                          text_color=age_c).pack(
-                side=side_end(), padx=pad(0, 6))
+            row_label(r1, age_t, bg, age_c, font=("Segoe UI", 8),
+                      side=side_end(), padx=pad(0, 6))
 
         # Row 2: User + Copy user + URL + Password + Eye + Copy pass
-        r2 = ctk.CTkFrame(inner, fg_color="transparent")
+        r2 = row_frame(inner, bg, fill="x", pady=(0, 1))
 
-        r2.pack(fill="x", pady=(0, 1))
+        row_label(r2, f"👤 {entry.get('username', '')}", bg, TEXT_SEC,
+                  font=("Segoe UI", 9), side=side_start())
 
-        ctk.CTkLabel(r2, text=f"👤 {entry.get('username', '')}",
-                      font=ui_font(11),
-                      text_color=TEXT_SEC,
-                      anchor=anchor_start()).pack(side=side_start())
-        cu = ctk.CTkButton(
-            r2, text="📋", width=28, height=22,
-            font=ui_font(10, family=None),
-            fg_color=GREEN, hover_color=GREEN_HOVER,
-            text_color=TEXT_ON_GREEN, corner_radius=5,
-            command=lambda: self._copy_to_clipboard(
-                entry.get("username", ""), cu))
-
-        cu.pack(side=side_start(), padx=pad(6, 0))
+        username = entry.get("username", "")
+        cu = icon_button(
+            r2, "📋", None, bg=GREEN, hover=GREEN_HOVER,
+            fg=TEXT_ON_GREEN, side=side_start(), padx=pad(6, 0))
+        cu.bind("<Button-1>",
+                lambda _e: self._copy_to_clipboard(username, cu), add="+")
         tip(cu, t("Copy username"))
 
-        # URL button
         url = entry.get("url", "")
         if url:
-            url_btn = ctk.CTkButton(
-                r2, text="🌐", width=28, height=22,
-                font=ui_font(10, family=None),
-                fg_color=BG_TERT, hover_color=TEXT_QUAT,
-                text_color=TEAL, corner_radius=5,
-                command=lambda u=url: self._open_url(u))
-            url_btn.pack(side=side_start(), padx=pad(4, 0))
+            url_btn = icon_button(
+                r2, "🌐", lambda u=url: self._open_url(u),
+                bg=BG_TERT, hover=TEXT_QUAT, fg=TEAL,
+                side=side_start(), padx=pad(4, 0))
             tip(url_btn, t("Open {url}", url=url))
 
         pwd = entry.get("password", "")
-
-        cp = ctk.CTkButton(
-            r2, text=t("🔑 Copy"), width=65, height=22,
-            font=ui_font(10, family=None),
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color=TEXT_ON_ACCENT, corner_radius=5,
-            command=lambda: self._copy_to_clipboard(pwd, cp))
-        cp.pack(side=side_end())
-
+        cp = icon_button(
+            r2, t("🔑 Copy"), None, bg=ACCENT, hover=ACCENT_HOVER,
+            fg=TEXT_ON_ACCENT, font=("Segoe UI", 9), side=side_end())
+        cp.bind("<Button-1>",
+                lambda _e: self._copy_to_clipboard(pwd, cp), add="+")
         tip(cp, t("Copy password"))
 
         # Fixed-width mask: one dot per character published the exact length
         # of every password to anyone glancing at the screen.
-        plbl = ctk.CTkLabel(r2, text=PASSWORD_MASK,
-                              font=ui_font(11, family=None),
-                              text_color=TEXT_TERT, anchor=anchor_end(),
-                              wraplength=240, justify=justify_end())
+        plbl = tk.Label(r2, text=PASSWORD_MASK, bg=resolve(bg),
+                        fg=resolve(TEXT_TERT), font=("Segoe UI", 9),
+                        bd=0, highlightthickness=0,
+                        anchor=anchor_end(), wraplength=240,
+                        justify=justify_end())
         plbl.pack(side=side_end(), padx=pad(0, 4))
 
         revealed = {"on": False}
@@ -1648,33 +1665,27 @@ class PasswordVault:
             lbl.configure(text=real if revealed["on"] else PASSWORD_MASK)
             eye.configure(text="🙈" if revealed["on"] else "👁")
 
-        eye = ctk.CTkButton(
-            r2, text="👁", width=24, height=22, fg_color="transparent",
-            hover_color=BG_TERT, corner_radius=5,
-            font=ui_font(10, family=None), command=toggle)
-        eye.pack(side=side_end(), padx=pad(0, 2))
+        eye = icon_button(r2, "👁", toggle, bg=bg, hover=BG_TERT,
+                          fg=TEXT_SEC, side=side_end(), padx=pad(0, 2))
         tip(eye, t("Show / hide password"))
 
         # Row 3: URL text (subtle, if exists)
         if url:
-            ctk.CTkLabel(inner,
-                          text=f"🔗 {url[:60]}{'…' if len(url) > 60 else ''}",
-                          font=ui_font(10),
-                          text_color=TEAL, anchor=anchor_start(),
-                          justify=ltr_justify(),
-                          cursor="hand2").pack(
-                fill="x", pady=(1, 0))
+            row_label(
+                inner, f"🔗 {url[:60]}{'…' if len(url) > 60 else ''}",
+                bg, TEAL, font=("Segoe UI", 8),
+                fill="x", pady=(1, 0)).configure(
+                    anchor=anchor_start(), justify=ltr_justify(),
+                    cursor="hand2")
 
         # Row 4: Notes
         notes = entry.get("notes", "")
         if notes:
-
-            ctk.CTkLabel(inner, text=notes,
-                          font=ui_font(10),
-                          text_color=TEXT_TERT, anchor=anchor_start(),
-                          wraplength=400,
-                          justify=justify_start()).pack(
-                fill="x", pady=(2, 0))
+            row_label(inner, notes, bg, TEXT_TERT,
+                      font=("Segoe UI", 8),
+                      fill="x", pady=(2, 0)).configure(
+                          anchor=anchor_start(), wraplength=400,
+                          justify=justify_start())
 
         # Bind right-click to the entire card and every child so the menu
         # opens regardless of where on the card the user clicks.

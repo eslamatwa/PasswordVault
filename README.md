@@ -362,17 +362,21 @@ Tk-dependent tests skip themselves automatically when no display is available.
   worker and show a busy state, so the window keeps repainting.
 - **The data side is fast.** On a 5,000-entry vault, encrypting the whole
   file takes ~36 ms, the security score ~44 ms, and a search filter ~7 ms.
-- **Rendering the list is not.** A card is 43 CustomTkinter widgets and a
-  CTk widget costs 9–46x a plain Tk one, so a repaint runs about a quarter
-  of a second per row — and the list repaints on search, category switch,
-  and every add, edit, delete or pin. Measure it on your own machine with:
+- **Rendering the list is the slow part, and is being worked on.** A
+  CustomTkinter widget draws itself onto its own canvas, which costs 9x a
+  plain `tk.Label` for text and 35–50x for a button or frame. A card used
+  to be 43 of them; it is now 14 plain widgets plus the frame that gives
+  the card its rounded tint, and the page is capped at 20. The worst case
+  went from 15.3 s to 2.0 s. Measure it on your own machine with:
 
   ```bash
   python tools/benchmark_ui.py
   ```
 
-  This is the next thing to fix; the options and the recommendation are
-  written up in [MVP.md](MVP.md) under *Rendering the entry list*.
+  Because plain widgets do not follow the appearance mode on their own,
+  the list is repainted when the theme or language changes. The remaining
+  step — reusing cards instead of rebuilding them, worth another 5–10x —
+  is written up in [MVP.md](MVP.md) under *Rendering the entry list*.
 
 ---
 

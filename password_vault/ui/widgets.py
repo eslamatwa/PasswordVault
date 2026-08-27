@@ -194,6 +194,101 @@ def sort_entries_pinned_first(entries: list[dict]) -> list[dict]:
                         e.get("title", "").lower()))
 
 
+# ─── Cheap Row Widgets ───────────────────────────────────────
+# A CustomTkinter widget draws itself onto its own canvas with rounded
+# corners. That is what makes it look right, and it costs 9x a plain
+# tk.Label for a CTkLabel, 35x for a CTkButton and 46x for a CTkFrame.
+# Everywhere else in the app that is a fine price to pay once. In the entry
+# list it is paid 43 times per row, on every search keystroke, category
+# switch, pin, edit and delete — which is why a twenty-entry vault took
+# five seconds to repaint.
+#
+# These build the same row out of plain Tk. The colours have to be resolved
+# for the active mode by hand, because a plain widget will not re-pick a
+# (light, dark) pair on its own — so the list is repainted when the theme
+# changes. `tools/benchmark_ui.py` measures the difference.
+
+
+def row_frame(parent, bg, **pack_kwargs):
+    """An invisible container inside a card.
+
+    Its only job is to group widgets for `pack`, so there is nothing for a
+    CTkFrame's canvas and rounded corners to draw.
+    """
+    frame = tk.Frame(parent, bg=resolve(bg), highlightthickness=0, bd=0)
+    if pack_kwargs:
+        frame.pack(**pack_kwargs)
+    return frame
+
+
+def row_label(parent, text, bg, fg, font=None, **pack_kwargs):
+    """Static text inside a card."""
+    label = tk.Label(parent, text=text, bg=resolve(bg), fg=resolve(fg),
+                     font=font or ("Segoe UI", 9), bd=0,
+                     highlightthickness=0)
+    if pack_kwargs:
+        label.pack(**pack_kwargs)
+    return label
+
+
+def icon_button(parent, text, command, *, bg, hover, fg,
+                font=None, cursor="hand2", **pack_kwargs):
+    """A small borderless button, built from a label.
+
+    The visible difference from a CTkButton is the corner radius, which on
+    a 24px square with no fill was never apparent. Everything that matters
+    is kept: the hover cue, the hand cursor, the click, and tooltips —
+    `tip()` binds with ``add="+"``, so it layers on top of the hover
+    bindings rather than replacing them.
+    """
+    rest, over = resolve(bg), resolve(hover)
+    label = tk.Label(parent, text=text, bg=rest, fg=resolve(fg),
+                     font=font or ("Segoe UI Emoji", 10), bd=0,
+                     highlightthickness=0, padx=5, pady=1, cursor=cursor)
+
+    def enter(_event):
+        try:
+            label.configure(bg=over)
+        except tk.TclError:
+            pass
+
+    def leave(_event):
+        try:
+            label.configure(bg=rest)
+        except tk.TclError:
+            pass
+
+    label.bind("<Enter>", enter, add="+")
+    label.bind("<Leave>", leave, add="+")
+    if command is not None:
+        label.bind("<Button-1>", lambda _e: command(), add="+")
+    if pack_kwargs:
+        label.pack(**pack_kwargs)
+    return label
+
+
+def flash_icon(widget, text, colour, revert_text, revert_bg,
+               after_ms=1000):
+    """Briefly change an icon button, then put it back.
+
+    The CTkButton version of this swapped `fg_color`; a label swaps `bg`.
+    """
+    try:
+        widget.configure(text=text, bg=resolve(colour))
+    except tk.TclError:
+        return
+    widget.after(after_ms,
+                 lambda: safe_label_cfg(widget, revert_text, revert_bg))
+
+
+def safe_label_cfg(label, text, bg) -> None:
+    """Configure a label's text and background, ignoring a dead widget."""
+    try:
+        label.configure(text=text, bg=resolve(bg))
+    except (tk.TclError, ValueError):
+        pass
+
+
 # ─── Dialog Chrome ───────────────────────────────────────────
 def dialog_header(parent, title: str, *, icon: str | None = None,
                   subtitle: str | None = None, size: int = 16,

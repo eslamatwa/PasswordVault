@@ -40,8 +40,14 @@ def _find(widget, predicate, out=None):
 
 
 def _labels(root):
+    """Every label, of either kind.
+
+    The entry list is built from plain `tk.Label`s for speed, so looking
+    only for CTkLabels finds nothing in a card — and a mirroring check
+    that inspects no cards passes for the wrong reason.
+    """
     import customtkinter as ctk
-    return _find(root, lambda w: isinstance(w, ctk.CTkLabel))
+    return _find(root, lambda w: isinstance(w, (ctk.CTkLabel, tk.Label)))
 
 
 class TestMainWindowMirrors:
