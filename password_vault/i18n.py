@@ -125,6 +125,21 @@ def justify_end() -> str:
     return "left" if is_rtl() else "right"
 
 
+def ltr_justify() -> str:
+    """``justify`` for a field whose content is always Latin.
+
+    Tk has no bidi algorithm, so a URL, hostname or port rendered into a
+    right-aligned Arabic form reads from the wrong edge — the scheme ends
+    up on the right and the path on the left. These fields are pinned to
+    left alignment in both languages: the surrounding labels still mirror,
+    but the value itself reads the way its own script does.
+
+    Only for fields that cannot contain the UI language. A username or a
+    note can be Arabic and must keep following the layout.
+    """
+    return "left"
+
+
 def pad(start, end):
     """Mirror a ``(left, right)`` padding pair for the active direction.
 
@@ -420,10 +435,12 @@ ARABIC: dict[str, str] = {
     "Excel export needs the openpyxl package":
         "تصدير Excel يحتاج حزمة openpyxl",
     "Could not write the file: {error}": "تعذّرت كتابة الملف: {error}",
-    "Select a CSV or Excel file to import.\nExports from Chrome, Bitwarden, "
-    "LastPass, 1Password,\nKeePass and Firefox are recognised too.":
-        "اختر ملف CSV أو Excel للاستيراد.\nملفات Chrome و Bitwarden و "
-        "LastPass و 1Password\nو KeePass و Firefox مدعومة أيضاً.",
+    "Select a CSV, Excel or JSON file to import.\nExports from Chrome, "
+    "Bitwarden, LastPass, 1Password,\nKeePass and Firefox are recognised "
+    "too.":
+        "اختر ملف CSV أو Excel أو JSON للاستيراد.\nملفات Chrome و "
+        "Bitwarden و LastPass و 1Password\nو KeePass و Firefox مدعومة "
+        "أيضاً.",
     "Format": "الصيغة",
     "Auto-detect": "كشف تلقائي",
     "Which application this file came from. Auto-detect reads the header "

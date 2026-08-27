@@ -31,7 +31,8 @@ from cryptography.fernet import InvalidToken
 from password_vault import instance_lock
 from password_vault.i18n import (
     LANGUAGE_VALUES, anchor_end, anchor_start, justify_end, justify_start,
-    label_for, pad, set_language, side_end, side_start, t, value_for,
+    label_for, ltr_justify, pad, set_language, side_end, side_start, t,
+    value_for,
 )
 from password_vault.theme import (
     CARD_COLORS, BG, BG_SEC, BG_TERT, SEPARATOR,
@@ -47,8 +48,8 @@ from password_vault.settings import (
     load_settings, save_settings,
 )
 from password_vault.crypto import (
-    DATA_FILE, APP_DIR,
-    get_or_create_salt, derive_key, save_data, load_data,
+    DATA_FILE, APP_DIR, candidate_salts, end_rotation,
+    get_or_create_salt, derive_key, rotate_salt, save_data, load_data,
 )
 from password_vault.security import (
     password_strength, password_age_text, safe_url, password_hash,
@@ -655,21 +656,54 @@ class PasswordVault:
         # follows it, so the whole thing goes to a worker: on the Tk thread
         # it froze the window at every single unlock, including the redraw
         # that would have shown the user their keypress landed.
-        salt = get_or_create_salt()
+        get_or_create_salt()
         self._set_unlocking(True)
 
         def work():
-            try:
-                key = derive_key(pw, salt)
-                data = load_data(key)
-            except BaseException as exc:  # noqa: BLE001 - marshalled below
-                self.root.after(0, lambda exc=exc: self._unlock_done(
-                    is_new, None, None, exc))
+            # Normally one salt. After an interrupted master-password
+            # change there are two, and the vault opens under whichever
+            # one the ciphertext was actually written with — which is what
+            # keeps that failure from being unrecoverable.
+            salts = candidate_salts()
+            last_error = None
+            for candidate in salts:
+                try:
+                    key = derive_key(pw, candidate)
+                    data = load_data(key)
+                except InvalidToken as exc:
+                    last_error = exc
+                    continue
+                except BaseException as exc:  # noqa: BLE001
+                    self.root.after(0, lambda exc=exc: self._unlock_done(
+                        is_new, None, None, exc))
+                    return
+                if candidate is not salts[0]:
+                    # The pending salt was the right one: finish the
+                    # rotation the interrupted change never completed.
+                    self._finish_interrupted_rotation(candidate)
+                self.root.after(0, lambda key=key, data=data:
+                                self._unlock_done(is_new, key, data, None))
                 return
             self.root.after(0, lambda: self._unlock_done(
-                is_new, key, data, None))
+                is_new, None, None, last_error or InvalidToken()))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _finish_interrupted_rotation(self, salt: bytes) -> None:
+        """Commit the salt a failed password change left journalled.
+
+        Runs off the Tk thread, from the unlock worker. Failing here is
+        survivable: the journal stays and the next unlock tries the same
+        two salts again.
+        """
+        try:
+            rotate_salt(salt)
+            end_rotation()
+            log.warning("Completed a salt rotation left over from an "
+                        "interrupted master-password change.")
+        except OSError as exc:
+            log.error("Could not complete the interrupted rotation: %s",
+                      exc, exc_info=True)
 
     def _set_unlocking(self, busy: bool) -> None:
         """Show that the vault is being opened, and refuse a second submit."""
@@ -1572,6 +1606,7 @@ class PasswordVault:
                           text=f"🔗 {url[:60]}{'…' if len(url) > 60 else ''}",
                           font=ui_font(10),
                           text_color=TEAL, anchor=anchor_start(),
+                          justify=ltr_justify(),
                           cursor="hand2").pack(
                 fill="x", pady=(1, 0))
 
@@ -1831,12 +1866,12 @@ class PasswordVault:
         pre_host = self._extract_host(entry.get("url", ""), entry)
         ctk.CTkLabel(form, text=t("Host / IP"),
                       font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(
+                      text_color=TEXT_PRI, anchor=anchor_start()).pack(
             fill="x", pady=(4, 1))
         host_e = ctk.CTkEntry(
             form, height=34, font=ctk.CTkFont(size=12),
             fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            text_color=TEXT_PRI,
+            text_color=TEXT_PRI, justify=ltr_justify(),
             placeholder_text=t("e.g. 192.168.1.10 or server.example.com"))
         host_e.pack(fill="x", pady=(0, 6))
         if pre_host:
@@ -1847,7 +1882,8 @@ class PasswordVault:
         if is_ssh:
             ctk.CTkLabel(form, text=t("Username"),
                           font=ctk.CTkFont(family="Segoe UI", size=12),
-                          text_color=TEXT_PRI, anchor="w").pack(
+                          text_color=TEXT_PRI,
+                          anchor=anchor_start()).pack(
                 fill="x", pady=(2, 1))
             user_e = ctk.CTkEntry(
                 form, height=34, font=ctk.CTkFont(size=12),
@@ -1861,11 +1897,12 @@ class PasswordVault:
         port_row.pack(fill="x", pady=(2, 6))
         ctk.CTkLabel(port_row, text=t("Port"),
                       font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_PRI, anchor="w").pack(side="left")
+                      text_color=TEXT_PRI,
+                      anchor=anchor_start()).pack(side=side_start())
         port_e = ctk.CTkEntry(
             port_row, width=80, height=34, font=ctk.CTkFont(size=12),
             fg_color=INPUT_BG, border_width=0, corner_radius=8,
-            text_color=TEXT_PRI)
+            text_color=TEXT_PRI, justify=ltr_justify())
         port_e.pack(side="left", padx=(10, 0))
         port_e.insert(0, str(self._extract_port(
             entry.get("url", ""), default_port)))
@@ -1878,7 +1915,8 @@ class PasswordVault:
                             else [t("No SSH client found")])
             ctk.CTkLabel(form, text=t("SSH Client"),
                           font=ctk.CTkFont(family="Segoe UI", size=12),
-                          text_color=TEXT_PRI, anchor="w").pack(
+                          text_color=TEXT_PRI,
+                          anchor=anchor_start()).pack(
                 fill="x", pady=(2, 1))
             client_var = ctk.StringVar(value=client_names[0])
             client_cb = ctk.CTkComboBox(
@@ -2066,7 +2104,7 @@ class PasswordVault:
                    if is_edit else (cats[0] if cats else ""))
         cat_cb = ios_combo(g1, "Category", cats, cat_val, idx=1)
         url_val = entry.get("url", "") if is_edit else ""
-        url_e = ios_field(g1, "URL", idx=2, value=url_val,
+        url_e = ios_field(g1, "URL", idx=2, value=url_val, ltr=True,
                            height=30, placeholder="https://example.com")
 
         # CREDENTIALS
@@ -2082,13 +2120,13 @@ class PasswordVault:
         ctk.CTkLabel(pw_row, text=t("Password"),
                       font=ctk.CTkFont(family="Segoe UI", size=12),
                       text_color=TEXT_PRI, width=72,
-                      anchor="w").pack(side="left")
+                      anchor=anchor_start()).pack(side=side_start())
         pass_e = ctk.CTkEntry(
             pw_row, height=30, show="●",
             font=ctk.CTkFont(family="Segoe UI", size=12),
             fg_color=INPUT_BG, border_width=0, corner_radius=6,
             text_color=TEXT_PRI)
-        pass_e.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        pass_e.pack(side=side_start(), fill="x", expand=True, padx=4)
         if is_edit:
             pass_e.insert(0, entry.get("password", ""))
         gen_btn = ctk.CTkButton(
@@ -2097,7 +2135,7 @@ class PasswordVault:
             fg_color=GREEN, hover_color=GREEN_HOVER, corner_radius=6,
             text_color=TEXT_ON_GREEN,
             command=lambda: self._show_generator(pass_e))
-        gen_btn.pack(side="right")
+        gen_btn.pack(side=side_end())
         tip(gen_btn, t("Open password generator"))
 
         def toggle_pass():
@@ -2113,7 +2151,7 @@ class PasswordVault:
             font=ctk.CTkFont(size=12), fg_color="transparent",
             hover_color=BG_TERT, corner_radius=6,
             text_color=TEXT_SEC, command=toggle_pass)
-        eye_btn.pack(side="right", padx=(0, 2))
+        eye_btn.pack(side=side_end(), padx=pad(0, 2))
         tip(eye_btn, t("Show / hide password"))
 
         # Strength bar
@@ -2122,12 +2160,12 @@ class PasswordVault:
         str_bar = ctk.CTkProgressBar(
             sf, height=3, corner_radius=2,
             fg_color=BG_TERT, progress_color=TEXT_QUAT)
-        str_bar.pack(side="left", fill="x", expand=True)
+        str_bar.pack(side=side_start(), fill="x", expand=True)
         str_bar.set(0)
         str_lbl = ctk.CTkLabel(sf, text="",
                                 font=ctk.CTkFont(size=9),
                                 text_color=TEXT_QUAT)
-        str_lbl.pack(side="left", padx=(6, 0))
+        str_lbl.pack(side=side_start(), padx=pad(6, 0))
         tip(str_bar, t("Password strength indicator"))
 
         # Duplicate warning label
@@ -2645,7 +2683,63 @@ class PasswordVault:
         self.root.mainloop()
 
 
+# Every module the app imports lazily, and so every module a frozen build
+# can only reach through the spec's hiddenimports. The dialogs are imported
+# inside the handlers that open them, which means a packaging mistake here
+# does not surface until a user clicks the menu item.
+LAZY_MODULES = (
+    "password_vault.crypto",
+    "password_vault.export_import",
+    "password_vault.i18n",
+    "password_vault.import_json",
+    "password_vault.import_profiles",
+    "password_vault.instance_lock",
+    "password_vault.security",
+    "password_vault.settings",
+    "password_vault.theme",
+    "password_vault.ui.floating",
+    "password_vault.ui.mini_vault",
+    "password_vault.ui.widgets",
+    "password_vault.ui.dialogs.about",
+    "password_vault.ui.dialogs.backup",
+    "password_vault.ui.dialogs.change_password",
+    "password_vault.ui.dialogs.data_io",
+    "password_vault.ui.dialogs.generator",
+    "password_vault.ui.dialogs.security_dashboard",
+    "password_vault.ui.dialogs.trash",
+)
+
+
+def self_test() -> int:
+    """Import every lazily-loaded module and report whether it resolved.
+
+    Exists so a packaged build can be checked without a person clicking
+    through every menu. The spec no longer ships the package source as
+    data, so this is what proves the hidden imports are sufficient:
+
+        PasswordVault.exe --self-test   # exit 0 = every module resolved
+    """
+    import importlib
+
+    failures = []
+    for name in LAZY_MODULES:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - reporting, not handling
+            failures.append(f"{name}: {exc}")
+    if failures:
+        for line in failures:
+            log.critical("Self-test import failure: %s", line)
+            print(f"FAIL {line}", file=sys.stderr)
+        return 1
+    log.info("Self-test: all %d lazy modules resolved.", len(LAZY_MODULES))
+    print(f"OK: {len(LAZY_MODULES)} modules resolved")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
     if not instance_lock.acquire():
         # A second copy would load its own snapshot of the vault and write it
         # back in full, discarding whatever the first one saved meanwhile.

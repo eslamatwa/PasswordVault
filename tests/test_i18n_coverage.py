@@ -38,6 +38,9 @@ EXEMPT = {
     "●", "👁", "🙈",
     # Font families and an example URL: not language.
     "Segoe UI", "Consolas", "https://example.com",
+    # Product names stay as they are written, in every language. The CSV
+    # profile labels reach the UI the same way, through Profile.label.
+    "Bitwarden JSON",
 }
 
 
@@ -201,35 +204,80 @@ class CatalogCoverageTests(unittest.TestCase):
                                 self._collect(value, found)
         return found
 
-    def test_every_string_has_an_arabic_translation(self):
-        from password_vault.i18n import ARABIC
-        missing = sorted(self._strings_reaching_t() - set(ARABIC))
-        self.assertEqual(
-            missing, [],
-            "strings with no Arabic entry:\n  "
-            + "\n  ".join(repr(m) for m in missing))
+    def test_every_string_is_translated_in_every_catalog(self):
+        """Runs per catalog, so adding a language is a data change.
 
-    def test_the_catalog_has_no_entries_nothing_uses(self):
+        A new entry in ``CATALOG`` is picked up here automatically and has
+        to be complete on the same terms Arabic is.
+        """
+        from password_vault.i18n import CATALOG
+        self.assertTrue(CATALOG, "no catalogs to check")
+        used = self._strings_reaching_t()
+        for language, table in CATALOG.items():
+            with self.subTest(language=language):
+                missing = sorted(used - set(table))
+                self.assertEqual(
+                    missing, [],
+                    f"strings with no {language} entry:\n  "
+                    + "\n  ".join(repr(m) for m in missing))
+
+    def test_no_catalog_has_entries_nothing_uses(self):
         """A stale key is dead weight and hides a renamed string."""
-        from password_vault.i18n import ARABIC
-        unused = sorted(set(ARABIC) - self._strings_reaching_t())
-        self.assertEqual(
-            unused, [],
-            "catalog entries no call site uses:\n  "
-            + "\n  ".join(repr(u) for u in unused))
+        from password_vault.i18n import CATALOG
+        used = self._strings_reaching_t()
+        for language, table in CATALOG.items():
+            with self.subTest(language=language):
+                unused = sorted(set(table) - used)
+                self.assertEqual(
+                    unused, [],
+                    f"{language} entries no call site uses:\n  "
+                    + "\n  ".join(repr(u) for u in unused))
+
+    def test_every_declared_language_has_a_catalog_or_is_the_source(self):
+        """A language in the dropdown with no catalog would silently show
+        English while claiming to be something else."""
+        from password_vault.i18n import CATALOG, LANGUAGE_VALUES
+        for value in LANGUAGE_VALUES:
+            if value == "English":
+                continue  # the source language needs no table
+            with self.subTest(language=value):
+                self.assertIn(value, CATALOG)
+
+    def test_the_settings_codes_match_the_declared_languages(self):
+        from password_vault.i18n import LANGUAGE_VALUES
+        from password_vault.settings import LANGUAGE_CODES
+        self.assertEqual(set(LANGUAGE_VALUES), set(LANGUAGE_CODES))
 
 
 class CatalogTests(unittest.TestCase):
-    def test_arabic_catalog_has_no_empty_translations(self):
-        from password_vault.i18n import ARABIC
-        empty = [k for k, v in ARABIC.items() if not v.strip()]
-        self.assertEqual(empty, [])
+    def test_no_catalog_has_empty_translations(self):
+        from password_vault.i18n import CATALOG
+        for language, table in CATALOG.items():
+            with self.subTest(language=language):
+                empty = [k for k, v in table.items() if not v.strip()]
+                self.assertEqual(empty, [])
 
-    def test_arabic_catalog_translates_rather_than_echoes(self):
+    def test_no_catalog_entry_echoes_its_key(self):
         """An entry equal to its key is a placeholder someone forgot."""
-        from password_vault.i18n import ARABIC
-        echoes = [k for k, v in ARABIC.items() if k == v]
-        self.assertEqual(echoes, [])
+        from password_vault.i18n import CATALOG
+        for language, table in CATALOG.items():
+            with self.subTest(language=language):
+                echoes = [k for k, v in table.items() if k == v]
+                self.assertEqual(echoes, [])
+
+    def test_every_catalog_keeps_its_placeholders(self):
+        """A translation may reorder placeholders but not invent or drop
+        them; a mismatch raises inside whichever dialog uses the string."""
+        import re
+        from password_vault.i18n import CATALOG
+
+        field = re.compile(r"\{(\w+)\}")
+        for language, table in CATALOG.items():
+            with self.subTest(language=language):
+                bad = [source for source, translated in table.items()
+                       if set(field.findall(source))
+                       != set(field.findall(translated))]
+                self.assertEqual(bad, [])
 
     def test_language_round_trips_through_its_label(self):
         from password_vault.i18n import (

@@ -122,6 +122,7 @@ Exports from these applications are read directly — no reformatting needed:
 | 1Password | `Title, Url, Username, Password, OTPAuth, Favorite, Tags, Notes` |
 | KeePass | `Account, Login Name, Password, Web Site, Comments, Group` |
 | Firefox | `url, username, password, httpRealm, …` |
+| Bitwarden **JSON** | the full export, not a column map — see below |
 
 The format is detected from the header row and shown in the import dialog,
 with a dropdown to override it if the guess is wrong. Folders, groupings and
@@ -131,6 +132,14 @@ tags become categories; favourites become pinned entries.
 dedicated home in this app, so it is appended to the entry's notes under its
 original name rather than discarded. Any column that cannot be carried at all
 is listed in the dialog *before* you import.
+
+**Bitwarden JSON** is read directly rather than through a column map, because
+a CSV cannot express what that format holds: folders joined by id, several
+URIs per item, per-item custom fields, and typed items beyond logins. Secure
+notes, cards and identities are imported as notes-only entries with their
+type recorded — skipping them silently would be the worst outcome. A
+password-protected Bitwarden export cannot be read; the dialog says so and
+tells you to export again without encryption.
 
 ### ℹ️ About Dialog
 - Version info, developer name, encryption details
@@ -208,6 +217,19 @@ hidden imports there, so a hand-written command will silently miss them.
 
 3. The installer will be created at `installer/PasswordVault_Setup.exe`.
 
+### Verifying a build
+The spec does **not** ship the package's `.py` files inside the executable —
+the dialogs are imported lazily, and `hiddenimports` is what makes them
+resolvable in a frozen build. Because a missing entry there only fails when
+a user clicks the menu item, the built exe can check itself:
+
+```bash
+dist\PasswordVault.exe --self-test
+```
+
+It imports every lazily-loaded module and exits `0` when they all resolve,
+non-zero with the failures on stderr otherwise.
+
 ### Build Output
 ```
 PasswordVault/
@@ -233,6 +255,7 @@ PasswordVault/
 │   ├── theme.py                     # Light/dark palettes & card presets
 │   ├── i18n.py                      # Translation catalog + RTL direction helpers
 │   ├── export_import.py             # CSV & Excel export/import helpers
+│   ├── import_json.py               # Bitwarden JSON export reader
 │   ├── import_profiles.py           # Column maps for other password managers
 │   ├── instance_lock.py             # Single-instance mutex / lock file
 │   └── ui/
@@ -340,6 +363,7 @@ Tk-dependent tests skip themselves automatically when no display is available.
 
 - All data is stored **locally** in `vault.dat`, encrypted with Fernet (AES-128-CBC + HMAC-SHA256).
 - Encryption salt is stored in `vault.salt` (32-byte, backwards-compatible with 16-byte).
+- Changing the master password journals the target salt to `vault.salt.pending` before re-encrypting. If the change is interrupted between writing the vault and rotating the salt, the login screen tries both salts, so the vault stays openable and the rotation is completed at the next unlock.
 - The encryption key is derived from your **Master Password** using PBKDF2HMAC (SHA-256, 480K iterations).
 - **Constant-time comparison** (`hmac.compare_digest`) is used for master password verification to prevent timing attacks.
 - **Atomic file saves** — data is written to a temp file first, then atomically replaced to prevent corruption on crash.

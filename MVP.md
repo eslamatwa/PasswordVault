@@ -128,6 +128,24 @@ python -m pyflakes main.py password_vault tests
   keep working under a non-Latin keyboard layout (Arabic, Russian, etc.).
 
 ### Packaging & docs
+- **The master-password change is recoverable.** The target salt is
+  journalled before the vault is re-encrypted under its key, so the window
+  where the ciphertext and the salt disagree is no longer opaque: the login
+  screen tries both salts and the vault opens either way. Previously, a
+  failed rotation *and* a failed rollback left a file no password could
+  open, logged as critical with nothing to do about it. Completing an
+  interrupted rotation happens at the next successful unlock.
+- **The executable no longer carries readable source.** The spec added the
+  package `.py` files as data because the dialogs are imported lazily and
+  static analysis misses them — but `hiddenimports` already covers that.
+  Verified by building both ways: 21 embedded `.py` entries before, 0 after,
+  and `PasswordVault.exe --self-test` resolves all 19 lazy modules in the
+  built exe. `tests/test_packaging.py` keeps that list and the spec's from
+  drifting apart.
+- **Bitwarden JSON import.** A column map cannot express folders joined by
+  id, several URIs per item, per-item custom fields, or typed items beyond
+  logins, so the JSON export is read directly. Secure notes, cards and
+  identities import as notes-only entries with their type recorded.
 - The build spec lists the lazily imported dialog modules and
   `instance_lock` as hidden imports; the README points at the spec instead of
   a hand-written PyInstaller command that would miss them.
@@ -217,34 +235,26 @@ later is invisible in English, so the check has to be static.
 
 Nothing at this size is outstanding. The next candidates, none started:
 
-- **Import profiles for the formats that need more than a column map** —
-  1Password's 1PUX and Bitwarden's JSON export carry attachments, item types
-  beyond logins, and per-item custom field lists. A CSV column map cannot
-  express any of it.
-- **A second interface language** would now be a data change: add a catalog
-  to `CATALOG` and a code to `LANGUAGE_CODES`. The coverage test enforces
-  completeness only for Arabic; a third language would want that generalised.
+- **1Password's 1PUX export** — a zip carrying attachments and item types
+  beyond logins. Bitwarden's JSON is now read directly; 1PUX needs archive
+  handling and a decision about where attachments would even go, since this
+  app stores none.
+- **A third interface language** is now purely a data change: add a catalog
+  to `CATALOG` and a code to `LANGUAGE_CODES`. The coverage test already
+  iterates over every catalog, so a new one is held to the same completeness
+  as Arabic from the moment it is added.
 
 ---
 
 ## Remaining — smaller, known and deliberate
 
-- **Source ships inside the executable.** The build spec adds the package
-  `.py` files as data, so the one-file exe carries readable source. Dropping
-  that and relying on the hidden imports alone would need a build-and-run
-  check, since the lazily imported dialogs depend on how PyInstaller resolves
-  them.
-- **Master password change has one unrecoverable window.** If salt rotation
-  fails after the vault was re-encrypted, the rollback re-saves with the old
-  key. If that rollback *also* fails, the vault cannot be opened; it is
-  logged as critical, and nothing recovers it automatically.
 - **Trash retention is applied in memory on load** and only reaches disk on
   the next user-initiated save, to avoid re-encrypting the whole vault at
   every startup.
-- **The smoke harness checks that a dialog builds, not that it looks right.**
-  A mirrored layout with the wrong padding passes. RTL was confirmed by eye
-  against a running Arabic build; there is no screenshot comparison.
-- **Arabic text is not shaped by Tk beyond what the font does.** Segoe UI
-  handles the joining, but Tk has no bidi algorithm, so a string mixing
-  Arabic with a Latin URL renders in logical order rather than reordered
-  visually. The URL and host fields are the ones this shows up in.
+- **Tk has no bidi algorithm.** Segoe UI handles the joining, but a string
+  mixing Arabic with Latin is rendered in logical order rather than
+  reordered visually. The fields where that actually showed — URL, host and
+  port — are now pinned to left alignment through `ltr_justify()`, so their
+  own content reads correctly while their labels still mirror. A note or a
+  title that mixes both scripts remains unreordered, and fixing that
+  properly means a bidi implementation Tk does not have.

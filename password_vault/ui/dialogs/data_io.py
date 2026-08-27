@@ -15,7 +15,8 @@ from ...i18n import anchor_start, pad, side_end, side_start, t
 from ...crypto import save_data
 from ...export_import import (
     HAS_OPENPYXL, MAX_IMPORT_BYTES, MAX_IMPORT_ROWS,
-    export_csv, export_excel, import_csv, import_excel, read_headers,
+    export_csv, export_excel, import_csv, import_excel, import_json,
+    read_headers,
 )
 from ...import_profiles import (
     PROFILES, describe, detect, unmapped_headers,
@@ -135,7 +136,7 @@ def show_import(app) -> None:
     dialog_header(dlg, "Import Data", icon="📥", pady=(16, 8))
 
     ctk.CTkLabel(dlg,
-                  text=t("Select a CSV or Excel file to import.\n"
+                  text=t("Select a CSV, Excel or JSON file to import.\n"
                        "Exports from Chrome, Bitwarden, LastPass, "
                        "1Password,\nKeePass and Firefox are recognised too."),
                   font=ctk.CTkFont(size=11),
@@ -180,7 +181,7 @@ def show_import(app) -> None:
 
     import_data = {"entries": []}
     busy = {"on": False}
-    picked = {"path": "", "headers": []}
+    picked = {"path": "", "headers": [], "json": False}
 
     def _alive() -> bool:
         try:
@@ -190,6 +191,8 @@ def show_import(app) -> None:
 
     def _chosen_profile():
         """The profile to parse with: the override, or the detected one."""
+        if picked["json"]:
+            return None      # the JSON reader has no column map
         label = fmt_var.get()
         if label == AUTO_DETECT:
             return detect(picked["headers"]) if picked["headers"] else None
@@ -213,7 +216,10 @@ def show_import(app) -> None:
             notes.append(t("Only the first {count} rows were read",
                            count=MAX_IMPORT_ROWS))
         profile = _chosen_profile()
-        if profile is not None and picked["headers"]:
+        if picked["json"]:
+            fmt_lbl.configure(text=t("Reading as {label}",
+                                     label="Bitwarden JSON"))
+        elif profile is not None and picked["headers"]:
             if fmt_var.get() == AUTO_DETECT:
                 fmt_lbl.configure(
                     text=t("Detected: {description}",
@@ -248,7 +254,8 @@ def show_import(app) -> None:
     def browse():
         if busy["on"]:
             return
-        ftypes = [("CSV files", "*.csv")]
+        ftypes = [("CSV files", "*.csv"),
+                  ("Bitwarden JSON", "*.json")]
         if HAS_OPENPYXL:
             ftypes.insert(0, ("Excel files", "*.xlsx"))
         ftypes.append(("All files", "*.*"))
@@ -266,11 +273,16 @@ def show_import(app) -> None:
             return
 
         picked["path"] = path
-        try:
-            picked["headers"] = read_headers(path)
-        except (OSError, ValueError, csv.Error) as ex:
-            _show_error(str(ex))
-            return
+        picked["json"] = path.lower().endswith(".json")
+        if picked["json"]:
+            # A JSON export has no header row; its shape is the format.
+            picked["headers"] = []
+        else:
+            try:
+                picked["headers"] = read_headers(path)
+            except (OSError, ValueError, csv.Error) as ex:
+                _show_error(str(ex))
+                return
         _reparse()
 
     def _reparse():
@@ -294,7 +306,9 @@ def show_import(app) -> None:
             # Parsing a large CSV/workbook on the Tk thread freezes the
             # window; do it off-thread and marshal the result back.
             try:
-                if path.lower().endswith(".xlsx"):
+                if picked["json"]:
+                    entries = import_json(path)
+                elif path.lower().endswith(".xlsx"):
                     entries = import_excel(path, profile)
                 else:
                     entries = import_csv(path, profile)

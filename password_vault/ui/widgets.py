@@ -8,7 +8,9 @@ import functools
 import tkinter as tk
 import customtkinter as ctk
 
-from ..i18n import anchor_start, justify_start, pad, side_end, side_start, t
+from ..i18n import (
+    anchor_start, justify_start, ltr_justify, pad, side_end, side_start, t,
+)
 from ..theme import (
     BG_GROUP, BG_SEC, BG_TERT, CARD_HOVER, SEPARATOR, ACCENT, ACCENT_HOVER,
     INPUT_BG, TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
@@ -285,7 +287,11 @@ def ios_group(parent, title: str | None = None, compact: bool = False):
 
 def ios_field(group, label: str, idx: int = 0, show: str = "",
               placeholder: str = "", value: str = "",
-              height: int = 34, is_textbox: bool = False):
+              height: int = 34, is_textbox: bool = False,
+              ltr: bool = False):
+    """*ltr* pins the input to left alignment for content that is always
+    Latin — a URL reads from the wrong edge in a right-aligned form,
+    because Tk has no bidi algorithm to reorder it."""
     label, placeholder = t(label), t(placeholder) if placeholder else ""
     if idx > 0:
         ctk.CTkFrame(group, height=1, fg_color=SEPARATOR).pack(
@@ -308,6 +314,7 @@ def ios_field(group, label: str, idx: int = 0, show: str = "",
                           font=ctk.CTkFont(family="Segoe UI", size=12),
                           fg_color=INPUT_BG, border_width=0, corner_radius=6,
                           placeholder_text=placeholder, text_color=TEXT_PRI,
+                          **({"justify": ltr_justify()} if ltr else {}),
                           **({} if not show else {"show": show}))
     entry.pack(side=side_start(), fill="x", expand=True, padx=pad(4, 0))
     if value:

@@ -35,6 +35,8 @@ for _fname in ("vault.dat", "vault.salt"):
 
 DATA_FILE = os.path.join(DATA_DIR, "vault.dat")
 SALT_FILE = os.path.join(DATA_DIR, "vault.salt")
+# Journal for an in-flight salt rotation; see begin_rotation().
+ROTATION_FILE = os.path.join(DATA_DIR, "vault.salt.pending")
 APP_DIR = _EXE_DIR
 
 # Upper bound for files we are willing to read into memory. A real vault is
@@ -93,6 +95,62 @@ def read_salt() -> bytes | None:
             return f.read()
     except OSError:
         return None
+
+
+def begin_rotation(new_salt: bytes) -> None:
+    """Record the salt a rotation is about to switch to.
+
+    Changing the master password writes the vault under the new key and
+    then rotates the salt. Between those two writes the file on disk and
+    the salt on disk disagree, and if the rotation fails *and* the rollback
+    re-save also fails, nothing on disk says which key the ciphertext is
+    under — the vault becomes unopenable by any password.
+
+    The journal closes that window. It costs one 32-byte write before the
+    re-encryption starts, and :func:`candidate_salts` hands both salts to
+    the login screen so whichever one matches wins.
+    """
+    tmp = ROTATION_FILE + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(new_salt)
+    os.replace(tmp, ROTATION_FILE)
+    _restrict_file(ROTATION_FILE)
+    log.info("Salt rotation journalled.")
+
+
+def end_rotation() -> None:
+    """Clear the journal once the salt and the vault agree again."""
+    try:
+        os.remove(ROTATION_FILE)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        # A stale journal is harmless: it only ever adds one extra key to
+        # try at unlock, and the next successful rotation overwrites it.
+        log.warning("Could not clear the rotation journal: %s", exc)
+
+
+def candidate_salts() -> list[bytes]:
+    """Every salt the vault might currently be encrypted under.
+
+    Normally one. After an interrupted master-password change, also the
+    salt that rotation was heading for, so a vault written under the new
+    key is still reachable with the new password.
+    """
+    salts = []
+    current = read_salt()
+    if current:
+        salts.append(current)
+    try:
+        with open(ROTATION_FILE, "rb") as f:
+            pending = f.read()
+    except OSError:
+        return salts
+    if pending and pending not in salts:
+        log.warning("An interrupted salt rotation was found; the pending "
+                    "salt will also be tried at unlock.")
+        salts.append(pending)
+    return salts
 
 
 def rotate_salt(salt: bytes | None = None) -> bytes:

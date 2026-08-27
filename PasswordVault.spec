@@ -1,27 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import os
-
-# Collect all password_vault package files
-_pkg_dir = os.path.join(SPECPATH, 'password_vault')
-_pkg_datas = []
-for root, dirs, files in os.walk(_pkg_dir):
-    for f in files:
-        if f.endswith('.py'):
-            src = os.path.join(root, f)
-            dst = os.path.relpath(root, SPECPATH)
-            _pkg_datas.append((src, dst))
+# The package's .py files used to be added as data, which shipped readable
+# source inside the one-file exe alongside the compiled modules it actually
+# imports. They were there because the dialogs are imported lazily inside
+# the handlers that open them, so static analysis misses them — but the
+# hiddenimports list below already covers that, and it is what the frozen
+# app imports from. Verified by building both ways and opening every dialog
+# in the built exe.
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.ico', '.')] + _pkg_datas,
+    datas=[('icon.ico', '.')],
     hiddenimports=[
         'password_vault',
         'password_vault.crypto',
         'password_vault.export_import',
         'password_vault.i18n',
+        # Imported inside export_import.import_json(), so static analysis
+        # does not see it — the same reason the dialogs are listed.
+        'password_vault.import_json',
         'password_vault.import_profiles',
         'password_vault.instance_lock',
         'password_vault.security',

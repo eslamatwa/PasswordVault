@@ -11,7 +11,10 @@ import tkinter as tk
 import customtkinter as ctk
 
 from ...i18n import t
-from ...crypto import derive_key, get_or_create_salt, rotate_salt, save_data
+from ...crypto import (
+    begin_rotation, derive_key, end_rotation, get_or_create_salt,
+    rotate_salt, save_data,
+)
 from ...security import password_strength
 from ...theme import (
     BG_TERT, ORANGE, ORANGE_HOVER, RED, TEXT_QUAT, TEXT_SEC,
@@ -156,10 +159,20 @@ def show(app) -> None:
                     app.root.after(0, lambda: finish("bad_old"))
                     return
                 new_key = derive_key(np_, new_salt)
+                # Journal the target salt before the vault is written
+                # under its key. From here until end_rotation() the login
+                # screen will try both salts, so an interruption anywhere
+                # in between leaves the vault openable — with the old
+                # password if the write never landed, the new one if it
+                # did.
+                begin_rotation(new_salt)
                 save_data(vault, new_key)
             except (OSError, ValueError) as exc:
                 log.error("Re-encrypt during password change failed: %s",
                           exc, exc_info=True)
+                # Nothing was written, so the journal points at a salt no
+                # file uses. Harmless but stale — clear it.
+                end_rotation()
                 app.root.after(0, lambda: finish("save_failed"))
                 return
             try:
@@ -172,11 +185,22 @@ def show(app) -> None:
                 try:
                     save_data(vault, old_key)
                 except (OSError, ValueError) as rb:
+                    # Once this was unrecoverable: the ciphertext was under
+                    # the new key while the salt still derived the old one,
+                    # and nothing on disk said so. The journal is still in
+                    # place here, so the login screen finds the new salt
+                    # and the vault opens with the new password.
                     log.critical(
-                        "Rollback after failed salt rotation failed: %s",
+                        "Rollback after failed salt rotation failed: %s. "
+                        "The rotation journal is left in place so the "
+                        "vault stays openable with the NEW password.",
                         rb, exc_info=True)
+                    app.root.after(0, lambda: finish("rotate_failed"))
+                    return
+                end_rotation()
                 app.root.after(0, lambda: finish("rotate_failed"))
                 return
+            end_rotation()
             # Only adopt the new key if the session is still the one that
             # started the change. If the vault locked while this ran, the
             # file and the salt are already consistent under the new

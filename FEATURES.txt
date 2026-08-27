@@ -40,7 +40,9 @@ SECURITY
   * Link Guard — only http and https URLs are opened
   * Lock Hygiene — auto-lock closes every open dialog, leaving no plaintext
     on screen
-  * Master Password Change — re-encrypts the vault and rotates the salt
+  * Master Password Change — re-encrypts the vault and rotates the salt.
+    The target salt is journalled first, so an interrupted change cannot
+    leave a vault that no password opens
 
 
 USER INTERFACE
@@ -149,6 +151,9 @@ IMPORT & EXPORT
   * Import from other password managers — Chrome/Edge, Bitwarden, LastPass,
     1Password, KeePass and Firefox. The format is detected from the header
     row and shown in the dialog, with a dropdown to override it
+  * Bitwarden JSON — read directly rather than as columns, so folders,
+    multiple URIs per item, custom fields, and secure notes/cards/identities
+    all survive the import
   * Nothing is dropped in silence — TOTP secrets and custom fields are kept
     in the entry's notes, and any column with no home is named in the dialog
     before you import
@@ -172,6 +177,7 @@ DATA STORAGE
 ------------
   * vault.dat    — encrypted password database (%APPDATA%\PasswordVault\)
   * vault.salt   — encryption salt, 32-byte (%APPDATA%\PasswordVault\)
+  * vault.salt.pending — only while a master-password change is in flight
   * settings.json — user preferences (%APPDATA%\PasswordVault\)
   * vault.log    — application event log (%APPDATA%\PasswordVault\)
 

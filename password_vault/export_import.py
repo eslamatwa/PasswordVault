@@ -161,6 +161,42 @@ def export_excel(entries: list[dict], filepath: str) -> bool:
     return True
 
 
+def import_json(filepath: str) -> list[dict]:
+    """Import a Bitwarden JSON export.
+
+    Kept apart from the CSV profiles because it is not a column map: the
+    format nests folders, multiple URIs, typed items and per-item custom
+    fields. :mod:`password_vault.import_json` does the reading; this only
+    completes the rows into full entries.
+    """
+    from .import_json import load
+
+    now_iso = datetime.datetime.now().isoformat()
+    entries = []
+    for row in load(filepath):
+        if len(entries) >= MAX_IMPORT_ROWS:
+            log.warning("JSON import truncated at %d rows.",
+                        MAX_IMPORT_ROWS)
+            break
+        if not (row.get("title") or row.get("password")
+                or row.get("notes")):
+            continue
+        entries.append({
+            "id": str(uuid.uuid4()),
+            "title": row.get("title", ""),
+            "username": row.get("username", ""),
+            "password": row.get("password", ""),
+            "url": row.get("url", ""),
+            "category": row.get("category") or "General",
+            "notes": row.get("notes", ""),
+            "color": "default",
+            "pinned": bool(row.get("pinned")),
+            "created_at": now_iso,
+            "modified_at": now_iso,
+        })
+    return entries
+
+
 def read_headers(filepath: str) -> list[str]:
     """Return the header row of *filepath* without parsing the body.
 
