@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from . import APP_VERSION
+from .i18n import t
 from .settings import PASSWORD_AGE_WARNING
 from .theme import RED, ORANGE, GREEN, TEXT_QUAT, TEXT_TERT
 
@@ -90,8 +91,11 @@ def password_strength(pw: str) -> tuple[int, str, str]:
         score += 1
     score = min(score, 4)
 
-    labels = {0: "Very Weak", 1: "Weak", 2: "Fair",
-              3: "Strong", 4: "Very Strong"}
+    # Translated here rather than at the five call sites that render it,
+    # and written out one call per label so the translation audit can see
+    # them — a t() on a dict lookup is invisible to static analysis.
+    labels = {0: t("Very Weak"), 1: t("Weak"), 2: t("Fair"),
+              3: t("Strong"), 4: t("Very Strong")}
     colors = {0: RED, 1: RED, 2: ORANGE, 3: GREEN, 4: GREEN}
     return score, labels[score], colors[score]
 
@@ -107,9 +111,9 @@ def password_age_text(ts: str | None) -> tuple[str, str]:
         if days < 0:
             # A timestamp in the future is corrupt or came from a machine
             # with a wrong clock; reporting "Today" hid the problem.
-            return "Future?", ORANGE
+            return t("Future?"), ORANGE
         if days == 0:
-            return "Today", GREEN
+            return t("Today"), GREEN
         if days == 1:
             return "1d", GREEN
         elif days < 7:

@@ -6,13 +6,16 @@ import tkinter as tk
 
 import customtkinter as ctk
 
+from ...i18n import (
+    anchor_end, anchor_start, justify_start, side_end, side_start, t,
+)
 from ...security import calculate_security_score, check_hibp_batch
 from ...settings import PASSWORD_AGE_WARNING
 from ...theme import (
     BG_TERT, CARD_HOVER, GREEN, ORANGE, PURPLE, PURPLE_HOVER, RED, SEPARATOR,
     TEXT_PRI, TEXT_SEC,
 )
-from ..widgets import ios_group, tip
+from ..widgets import dialog_header, ios_group, tip
 
 # Breached entries listed inline; the rest are summarised as a count.
 MAX_LISTED_BREACHES = 15
@@ -24,10 +27,8 @@ def show(app) -> None:
     entries = app.data.get("entries", [])
     score, stats = calculate_security_score(entries)
 
-    ctk.CTkLabel(dlg, text="🛡️  Security Dashboard",
-                  font=ctk.CTkFont(family="Segoe UI", size=17,
-                                    weight="bold"),
-                  text_color=TEXT_PRI).pack(pady=(14, 8))
+    dialog_header(dlg, "Security Dashboard", icon="🛡️",
+                  size=17, pady=(14, 8))
 
     score_color = GREEN if score >= 70 else (ORANGE if score >= 40
                                               else RED)
@@ -47,7 +48,7 @@ def show(app) -> None:
                               fg_color=BG_TERT, progress_color=score_color)
     pb.pack(pady=(0, 14))
     pb.set(score / 100)
-    tip(pb, f"Your security score: {score}/100")
+    tip(pb, t("Your security score: {score}/100", score=score))
 
     scroll = ctk.CTkScrollableFrame(dlg, fg_color="transparent",
                                      scrollbar_button_color=BG_TERT)
@@ -62,13 +63,15 @@ def show(app) -> None:
                 fill="x", padx=(46, 0))
         row = ctk.CTkFrame(grp, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=5)
-        ctk.CTkLabel(row, text=f"{icon}  {label}",
+        ctk.CTkLabel(row, text=f"{icon}  {t(label)}",
                       font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_SEC, anchor="w").pack(side="left")
+                      text_color=TEXT_SEC,
+                      anchor=anchor_start()).pack(side=side_start())
         ctk.CTkLabel(row, text=str(value),
                       font=ctk.CTkFont(family="Segoe UI", size=14,
                                         weight="bold"),
-                      text_color=color, anchor="e").pack(side="right")
+                      text_color=color,
+                      anchor=anchor_end()).pack(side=side_end())
 
     stat_row(g, "📊", "Total Entries", stats["total"], TEXT_PRI, 0)
     stat_row(g, "💪", "Strong Passwords", stats["strong"], GREEN, 1)
@@ -76,24 +79,24 @@ def show(app) -> None:
     stat_row(g, "⚠️", "Weak Passwords", stats["weak"], RED, 3)
     stat_row(g, "🔁", "Duplicate Passwords",
               stats["duplicates"], ORANGE, 4)
-    stat_row(g, "⏰", f"Old (>{PASSWORD_AGE_WARNING}d)",
+    stat_row(g, "⏰", t("Old (>{days}d)", days=PASSWORD_AGE_WARNING),
               stats["old"], ORANGE, 5)
 
     recs = []
     if stats["weak"] > 0:
-        recs.append(
-            f"⚠️  {stats['weak']} weak password(s) — "
-            f"update them for better security")
+        recs.append(t(
+            "⚠️  {count} weak password(s) — update them for better "
+            "security", count=stats["weak"]))
     if stats["duplicates"] > 0:
-        recs.append(
-            f"🔁  {stats['duplicates']} reused password(s) — "
-            f"use unique passwords per account")
+        recs.append(t(
+            "🔁  {count} reused password(s) — use unique passwords per "
+            "account", count=stats["duplicates"]))
     if stats["old"] > 0:
-        recs.append(
-            f"⏰  {stats['old']} password(s) older than "
-            f"{PASSWORD_AGE_WARNING} days — consider updating")
+        recs.append(t(
+            "⏰  {count} password(s) older than {days} days — consider "
+            "updating", count=stats["old"], days=PASSWORD_AGE_WARNING))
     if not recs:
-        recs.append("✅  Great job! Your vault is secure!")
+        recs.append(t("✅  Great job! Your vault is secure!"))
 
     g2 = ios_group(scroll, "Recommendations")
     for i, rec in enumerate(recs):
@@ -103,22 +106,22 @@ def show(app) -> None:
                 fill="x", padx=(16, 0))
         ctk.CTkLabel(g2, text=rec,
                       font=ctk.CTkFont(family="Segoe UI", size=11),
-                      text_color=TEXT_PRI, anchor="w",
-                      wraplength=380, justify="left").pack(
+                      text_color=TEXT_PRI, anchor=anchor_start(),
+                      wraplength=380, justify=justify_start()).pack(
             fill="x", padx=12, pady=5)
 
     g3 = ios_group(scroll, "Breach Check")
     breach_lbl = ctk.CTkLabel(
         g3,
-        text="Check if your passwords appear in known\n"
-             "data breaches (via Have I Been Pwned).",
+        text=t("Check if your passwords appear in known\n"
+             "data breaches (via Have I Been Pwned)."),
         font=ctk.CTkFont(size=11), text_color=TEXT_SEC,
         justify="center")
     breach_lbl.pack(padx=12, pady=(8, 4))
 
     breach_result = ctk.CTkLabel(
         g3, text="", font=ctk.CTkFont(size=11),
-        text_color=TEXT_PRI, wraplength=380, justify="left")
+        text_color=TEXT_PRI, wraplength=380, justify=justify_start())
     breach_result.pack(padx=12, pady=(0, 8))
 
     def start_breach():
@@ -128,11 +131,11 @@ def show(app) -> None:
         current = list(app.data.get("entries", []))
         if not current:
             breach_result.configure(
-                text="No entries to check.", text_color=TEXT_SEC)
+                text=t("No entries to check."), text_color=TEXT_SEC)
             return
-        breach_btn.configure(state="disabled", text="⏳ Checking...")
+        breach_btn.configure(state="disabled", text=t("⏳ Checking..."))
         breach_result.configure(
-            text="Checking passwords against HIBP database...",
+            text=t("Checking passwords against HIBP database..."),
             text_color=TEXT_SEC)
 
         def _alive() -> bool:
@@ -147,7 +150,8 @@ def show(app) -> None:
                 if not _alive():
                     return
                 breach_result.configure(
-                    text=f"Checking passwords… {done}/{total}",
+                    text=t("Checking passwords… {done}/{total}",
+                           done=done, total=total),
                     text_color=TEXT_SEC)
 
             app.root.after(0, _tick)
@@ -169,37 +173,39 @@ def show(app) -> None:
                     # One unbounded label broke the layout on a big vault.
                     listed = names[:MAX_LISTED_BREACHES]
                     if len(names) > MAX_LISTED_BREACHES:
-                        listed.append(
-                            f"  … and {len(names) - MAX_LISTED_BREACHES} more")
-                    txt = (f"🚨 {len(breached)} password(s) "
-                           f"found in breaches!\n"
-                           + "\n".join(listed))
+                        listed.append(t(
+                            "  … and {count} more",
+                            count=len(names) - MAX_LISTED_BREACHES))
+                    txt = (t("🚨 {count} password(s) found in "
+                             "breaches!", count=len(breached))
+                           + "\n" + "\n".join(listed))
                     breach_result.configure(text=txt, text_color=RED)
                 else:
-                    txt = "✅ No passwords found in breaches!"
+                    txt = t("✅ No passwords found in breaches!")
                     if errors:
-                        txt += (f"\n⚠️ {errors} could not "
-                                f"be checked (network error)")
+                        txt += "\n" + t(
+                            "⚠️ {count} could not be checked "
+                            "(network error)", count=errors)
                     breach_result.configure(text=txt, text_color=GREEN)
                 breach_btn.configure(state="normal",
-                                      text="🔍  Check Breaches")
+                                      text=t("🔍  Check Breaches"))
 
             app.root.after(0, _update)
 
         check_hibp_batch(current, on_progress, on_done)
 
     breach_btn = ctk.CTkButton(
-        g3, text="🔍  Check Breaches", height=34,
+        g3, text=t("🔍  Check Breaches"), height=34,
         font=ctk.CTkFont(size=12, weight="bold"),
         fg_color=PURPLE, hover_color=PURPLE_HOVER,
         corner_radius=8, command=start_breach)
     breach_btn.pack(padx=12, pady=(0, 10))
     tip(breach_btn,
-        "Check all passwords against the HIBP breach database "
-        "(uses k-anonymity — your passwords are NOT sent)")
+        t("Check all passwords against the HIBP breach database "
+        "(uses k-anonymity — your passwords are NOT sent)"))
 
     ctk.CTkButton(
-        dlg, text="Close", height=36, width=140,
+        dlg, text=t("Close"), height=36, width=140,
         font=ctk.CTkFont(size=13), fg_color=BG_TERT,
         hover_color=CARD_HOVER, corner_radius=10,
         command=dlg.destroy).pack(pady=(0, 12))

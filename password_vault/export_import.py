@@ -9,6 +9,8 @@ import datetime
 import logging
 import uuid
 
+from .import_profiles import NATIVE, Profile, detect
+
 try:
     import openpyxl
     import openpyxl.styles
@@ -76,33 +78,54 @@ def _entry_to_row(e: dict) -> list[str]:
     return [_escape_formula(e.get(f, "")) for f in _ENTRY_FIELDS]
 
 
-def _row_to_entry(d: dict) -> dict:
-    """Convert a row keyed by export column names into an entry dict.
+def _row_to_entry(d: dict, profile: Profile | None = None) -> dict:
+    """Convert one source row into an entry dict.
 
-    Lower-cased keys are accepted as well, so a hand-edited file still
-    imports.
+    Keys are matched case-insensitively, so a hand-edited file still
+    imports. *profile* selects the source application's column layout;
+    ``None`` means this app's own export.
     """
+    profile = profile or NATIVE
     now_iso = datetime.datetime.now().isoformat()
+    # One lower-cased view of the row, so every lookup below is a plain
+    # dict hit rather than a scan per column.
+    lowered = {str(k).strip().lower(): v
+               for k, v in d.items() if k is not None}
+
     raw: dict[str, str] = {}
-    for col, field in _FIELD_MAP.items():
-        value = d.get(col)
-        if value is None:
-            value = d.get(col.lower(), "")
-        raw[field] = _unescape_formula("" if value is None else str(value))
+    for header, field_name in profile.columns.items():
+        value = lowered.get(header)
+        if value in (None, ""):
+            continue
+        text = _unescape_formula(str(value))
+        # Several sources spread one of our fields over more than one
+        # column (Chrome's "note"/"notes"); first non-empty wins.
+        raw.setdefault(field_name, text)
+
+    notes = raw.get("notes", "")
+    extra_lines = []
+    for header, label in profile.extras.items():
+        value = lowered.get(header)
+        if value in (None, ""):
+            continue
+        extra_lines.append(f"{label}: {_unescape_formula(str(value))}")
+    if extra_lines:
+        notes = "\n".join(([notes] if notes else []) + extra_lines)
+
     return {
         "id": str(uuid.uuid4()),
-        "title": raw["title"],
-        "username": raw["username"],
-        "password": raw["password"],
-        "url": raw["url"],
-        "category": raw["category"] or "General",
-        "notes": raw["notes"],
-        "color": raw["color"] or "default",
-        "pinned": raw["pinned"].strip().lower() in _TRUTHY,
-        "created_at": raw["created_at"] or now_iso,
+        "title": raw.get("title", ""),
+        "username": raw.get("username", ""),
+        "password": raw.get("password", ""),
+        "url": raw.get("url", ""),
+        "category": raw.get("category", "") or "General",
+        "notes": notes,
+        "color": raw.get("color", "") or "default",
+        "pinned": raw.get("pinned", "").strip().lower() in _TRUTHY,
+        "created_at": raw.get("created_at", "") or now_iso,
         # Keep the exported timestamp: overwriting it with "now" made every
         # imported entry look freshly rotated and skewed the age stats.
-        "modified_at": raw["modified_at"] or now_iso,
+        "modified_at": raw.get("modified_at", "") or now_iso,
     }
 
 
@@ -138,23 +161,55 @@ def export_excel(entries: list[dict], filepath: str) -> bool:
     return True
 
 
-def import_csv(filepath: str) -> list[dict]:
-    """Import entries from a CSV file (capped at ``MAX_IMPORT_ROWS``)."""
+def read_headers(filepath: str) -> list[str]:
+    """Return the header row of *filepath* without parsing the body.
+
+    The import dialog needs the column names to name a profile before it
+    commits to reading thousands of rows under the wrong one.
+    """
+    if filepath.lower().endswith(".xlsx"):
+        if not HAS_OPENPYXL:
+            return []
+        wb = openpyxl.load_workbook(filepath, read_only=True)
+        try:
+            rows = wb.active.iter_rows(values_only=True)
+            try:
+                return [str(h).strip() if h else "" for h in next(rows)]
+            except StopIteration:
+                return []
+        finally:
+            wb.close()
+    with open(filepath, "r", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        try:
+            return [str(h).strip() for h in next(reader)]
+        except StopIteration:
+            return []
+
+
+def import_csv(filepath: str, profile: Profile | None = None) -> list[dict]:
+    """Import entries from a CSV file (capped at ``MAX_IMPORT_ROWS``).
+
+    *profile* names the source application's column layout; ``None``
+    detects it from the header row.
+    """
     entries: list[dict] = []
     with open(filepath, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        chosen = profile or detect(reader.fieldnames or [])
         for row in reader:
             if len(entries) >= MAX_IMPORT_ROWS:
                 log.warning("CSV import truncated at %d rows.",
                             MAX_IMPORT_ROWS)
                 break
-            e = _row_to_entry(row)
+            e = _row_to_entry(row, chosen)
             if e["title"] or e["password"]:
                 entries.append(e)
     return entries
 
 
-def import_excel(filepath: str) -> list[dict]:
+def import_excel(filepath: str,
+                 profile: Profile | None = None) -> list[dict]:
     """Import entries from an Excel file, streaming row by row.
 
     Capped at ``MAX_IMPORT_ROWS`` so a huge or malformed workbook cannot
@@ -170,6 +225,7 @@ def import_excel(filepath: str) -> list[dict]:
         except StopIteration:
             return []
         headers = [str(h).strip() if h else "" for h in header_row]
+        chosen = profile or detect(headers)
         entries: list[dict] = []
         for row in rows:
             if len(entries) >= MAX_IMPORT_ROWS:
@@ -177,7 +233,7 @@ def import_excel(filepath: str) -> list[dict]:
                             MAX_IMPORT_ROWS)
                 break
             d = dict(zip(headers, [_cell_to_text(v) for v in row]))
-            e = _row_to_entry(d)
+            e = _row_to_entry(d, chosen)
             if e["title"] or e["password"]:
                 entries.append(e)
         return entries

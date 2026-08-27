@@ -121,13 +121,23 @@ class RestoreToNewVaultTests(unittest.TestCase):
             sys.modules.pop(mod, None)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def _key_and_salt(self, password="NewMaster123"):
+        """What the dialog's worker thread hands the restore function.
+
+        The key and its salt are derived off the Tk thread now, so the
+        restore itself only writes files and this pair is its input.
+        """
+        salt = os.urandom(32)
+        return self.crypto.derive_key(password, salt), salt
+
     def test_restore_opens_with_the_new_master_password(self):
         app = _FakeApp()
         dlg = _FakeDialog()
         data = {"entries": [{"title": "from backup"}], "categories": ["A"],
                 "trash": []}
 
-        self.backup._restore_to_new_vault(app, data, dlg, "NewMaster123")
+        self.backup._restore_to_new_vault(app, data, dlg,
+                                          self._key_and_salt())
 
         self.assertTrue(dlg.destroyed)
         self.assertTrue(app.unlocked)
@@ -148,7 +158,7 @@ class RestoreToNewVaultTests(unittest.TestCase):
                                side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.backup._restore_to_new_vault(
-                    app, {"entries": []}, dlg, "NewMaster123")
+                    app, {"entries": []}, dlg, self._key_and_salt())
 
         self.assertEqual(self.crypto.read_salt(), old_salt)
         self.assertEqual(
@@ -163,7 +173,7 @@ class RestoreToNewVaultTests(unittest.TestCase):
                                side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.backup._restore_to_new_vault(
-                    app, {"entries": []}, dlg, "NewMaster123")
+                    app, {"entries": []}, dlg, self._key_and_salt())
 
         self.assertIsNone(self.crypto.read_salt())
 

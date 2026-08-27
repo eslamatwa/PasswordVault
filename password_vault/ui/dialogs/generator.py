@@ -6,6 +6,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
+from ...i18n import t
 from ...security import generate_password, password_strength
 from ...settings import save_settings
 from ...theme import (
@@ -22,7 +23,7 @@ def show(app, target_entry) -> None:
     dlg = app._make_dialog("Password Generator", 380, 330)
 
     ctk.CTkLabel(
-        dlg, text="🎲  Password Generator",
+        dlg, text=t("🎲  Password Generator"),
         font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
         text_color=TEXT_PRI).pack(pady=(14, 8))
 
@@ -43,7 +44,7 @@ def show(app, target_entry) -> None:
         border_color=ACCENT, corner_radius=10, justify="center",
         text_color=TEXT_PRI)
     gen_entry.pack(fill="x", pady=(0, 5))
-    tip(gen_entry, "Generated password — click Use This to apply it")
+    tip(gen_entry, t("Generated password — click Use This to apply it"))
 
     sf = ctk.CTkFrame(frm, fg_color="transparent")
     sf.pack(fill="x", pady=(0, 8))
@@ -62,7 +63,7 @@ def show(app, target_entry) -> None:
 
     lf = ctk.CTkFrame(frm, fg_color="transparent")
     lf.pack(fill="x", pady=(0, 5))
-    ctk.CTkLabel(lf, text="Length:",
+    ctk.CTkLabel(lf, text=t("Length:"),
                   font=ctk.CTkFont(size=11),
                   text_color=TEXT_SEC).pack(side="left")
     ll = ctk.CTkLabel(lf, text=str(_gl),
@@ -99,15 +100,15 @@ def show(app, target_entry) -> None:
         button_color=ACCENT, button_hover_color=ACCENT_HOVER)
     slider.set(_gl)
     slider.pack(side="left", fill="x", expand=True, padx=(8, 8))
-    tip(slider, "Drag to change password length")
+    tip(slider, t("Drag to change password length"))
 
     cf = ctk.CTkFrame(frm, fg_color="transparent")
     cf.pack(fill="x", pady=(0, 8))
     for txt, var, desc in [
-        ("ABC", uv, "Include uppercase letters"),
-        ("abc", lov, "Include lowercase letters"),
-        ("123", dv, "Include digits"),
-        ("#$%", sv, "Include special characters"),
+        ("ABC", uv, t("Include uppercase letters")),
+        ("abc", lov, t("Include lowercase letters")),
+        ("123", dv, t("Include digits")),
+        ("#$%", sv, t("Include special characters")),
     ]:
         chk = ctk.CTkCheckBox(
             cf, text=txt, variable=var,
@@ -120,11 +121,11 @@ def show(app, target_entry) -> None:
     bf = ctk.CTkFrame(frm, fg_color="transparent")
     bf.pack(fill="x")
     regen_btn = ctk.CTkButton(
-        bf, text="🔄  Regenerate", height=32,
+        bf, text=t("🔄  Regenerate"), height=32,
         font=ctk.CTkFont(size=12), fg_color=BG_TERT,
         hover_color=TEXT_QUAT, corner_radius=8, command=regen)
     regen_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
-    tip(regen_btn, "Generate a new random password")
+    tip(regen_btn, t("Generate a new random password"))
 
     def remember_options():
         """Persist the picked options so the next open starts here."""
@@ -143,10 +144,10 @@ def show(app, target_entry) -> None:
         dlg.destroy()
 
     use_btn = ctk.CTkButton(
-        bf, text="✅  Use This", height=32,
+        bf, text=t("✅  Use This"), height=32,
         font=ctk.CTkFont(size=12, weight="bold"),
         fg_color=GREEN, hover_color=GREEN_HOVER, text_color=TEXT_ON_GREEN,
         corner_radius=8, command=use)
     use_btn.pack(side="right", fill="x", expand=True, padx=(4, 0))
-    tip(use_btn, "Apply this password to the entry")
+    tip(use_btn, t("Apply this password to the entry"))
     regen()

@@ -7,6 +7,7 @@ from __future__ import annotations
 import tkinter as tk
 import customtkinter as ctk
 
+from ..i18n import anchor_start, pad, side_end, side_start, t
 from ..theme import (
     BG, BG_SEC, BG_TERT, ACCENT, ACCENT_HOVER,
     RED_HOVER, CARD_HOVER, TEAL, TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
@@ -37,7 +38,7 @@ class MiniVault(ctk.CTkToplevel):
         self._mini_cat = "All"
         self._search_after_id = None
         self._visible_limit = MINI_PAGE_SIZE
-        self.title("Mini Vault")
+        self.title(t("Mini Vault"))
         self.geometry("340x420")
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -52,26 +53,27 @@ class MiniVault(ctk.CTkToplevel):
         title_bar.bind("<Button-1>", self._start_drag)
         title_bar.bind("<B1-Motion>", self._do_drag)
 
-        ctk.CTkLabel(title_bar, text="🔐  Mini Vault",
+        ctk.CTkLabel(title_bar, text=t("🔐  Mini Vault"),
                       font=ctk.CTkFont(family="Segoe UI", size=12,
                                         weight="bold"),
-                      text_color=TEXT_PRI).pack(side="left", padx=12)
+                      text_color=TEXT_PRI).pack(side=side_start(),
+                                                padx=12)
 
         close_btn = ctk.CTkButton(title_bar, text="✕", width=28, height=28,
                                     font=ctk.CTkFont(size=13),
                                     fg_color="transparent",
                                     hover_color=RED_HOVER, corner_radius=6,
                                     text_color=TEXT_SEC, command=self._close)
-        close_btn.pack(side="right", padx=(0, 4), pady=4)
-        tip(close_btn, "Close Mini Vault")
+        close_btn.pack(side=side_end(), padx=pad(0, 4), pady=4)
+        tip(close_btn, t("Close Mini Vault"))
 
         full_btn = ctk.CTkButton(title_bar, text="⬜", width=28, height=28,
                                    font=ctk.CTkFont(size=11),
                                    fg_color="transparent",
                                    hover_color=CARD_HOVER, corner_radius=6,
                                    text_color=TEXT_SEC, command=self._open_full)
-        full_btn.pack(side="right", padx=(0, 2), pady=4)
-        tip(full_btn, "Open full vault window")
+        full_btn.pack(side=side_end(), padx=pad(0, 2), pady=4)
+        tip(full_btn, t("Open full vault window"))
 
         # Search
         self.search_var = ctk.StringVar()
@@ -87,7 +89,7 @@ class MiniVault(ctk.CTkToplevel):
         self._cat_label = ctk.CTkLabel(self, text="",
                                          font=ctk.CTkFont(size=10),
                                          text_color=ACCENT, height=14)
-        self._cat_label.pack(padx=12, anchor="w")
+        self._cat_label.pack(padx=12, anchor=anchor_start())
 
         self.list_frame = ctk.CTkScrollableFrame(
             self, fg_color="transparent",
@@ -144,7 +146,7 @@ class MiniVault(ctk.CTkToplevel):
             self.search_var.get())
         entries = sort_entries_pinned_first(entries)
         if not entries:
-            ctk.CTkLabel(self.list_frame, text="No results",
+            ctk.CTkLabel(self.list_frame, text=t("No results"),
                           font=ui_font(12, family=None),
                           text_color=TEXT_TERT).pack(pady=40)
             return
@@ -154,7 +156,7 @@ class MiniVault(ctk.CTkToplevel):
         if hidden > 0:
             more = ctk.CTkButton(
                 self.list_frame,
-                text=f"⬇  Show more  ({hidden})",
+                text=t("⬇  Show more  ({hidden})", hidden=hidden),
                 height=28, font=ui_font(10),
                 fg_color=BG_SEC, hover_color=BG_TERT, corner_radius=6,
                 text_color=TEXT_SEC, command=self._show_more)
@@ -174,46 +176,46 @@ class MiniVault(ctk.CTkToplevel):
         url = entry.get("url", "")
 
         menu.add_command(
-            label="📋  Copy Username",
+            label=t("📋  Copy Username"),
             command=lambda: self._mini_copy_text(username))
         menu.add_command(
-            label="🔑  Copy Password",
+            label=t("🔑  Copy Password"),
             command=lambda: self._mini_copy_text(password))
         menu.add_separator()
 
         if url:
             menu.add_command(
-                label="🌐  Open URL in Browser",
+                label=t("🌐  Open URL in Browser"),
                 command=lambda: self.app._open_url(url))
             menu.add_command(
-                label="🌐  Open URL + Copy Username",
+                label=t("🌐  Open URL + Copy Username"),
                 command=lambda: (self._mini_copy_text(username),
                                  self.app._open_url(url)))
         else:
-            menu.add_command(label="🌐  Open URL in Browser",
+            menu.add_command(label=t("🌐  Open URL in Browser"),
                              state="disabled")
 
         # SSH / RDP only when the entry looks like a remote host.
         if self.app._looks_remote(entry, url):
             menu.add_separator()
             menu.add_command(
-                label="🖥️  SSH Session …",
+                label=t("🖥️  SSH Session …"),
                 command=lambda: self.app._show_ssh_dialog(entry))
             menu.add_command(
-                label="🖥️  RDP Session …",
+                label=t("🖥️  RDP Session …"),
                 command=lambda: self.app._show_rdp_dialog(entry))
         menu.add_separator()
 
         menu.add_command(
-            label="✏️  Edit Entry",
+            label=t("✏️  Edit Entry"),
             command=lambda: self._mini_edit(entry))
         menu.add_command(
-            label="📌  Pin / Unpin",
+            label=t("📌  Pin / Unpin"),
             command=lambda: (
                 entry.update(pinned=not entry.get("pinned", False)),
                 self.app._save_and_refresh()))
         menu.add_command(
-            label="🗑️  Delete",
+            label=t("🗑️  Delete"),
             command=lambda: self.app.confirm_delete(entry))
 
         try:
@@ -252,8 +254,9 @@ class MiniVault(ctk.CTkToplevel):
         title_lbl = ctk.CTkLabel(
             title_row,
             text=f"{pin_icon}{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
-            font=ui_font(12, "bold"), text_color=TEXT_PRI, anchor="w")
-        title_lbl.pack(side="left", fill="x", expand=True)
+            font=ui_font(12, "bold"), text_color=TEXT_PRI,
+            anchor=anchor_start())
+        title_lbl.pack(side=side_start(), fill="x", expand=True)
         if len(full_title) > TITLE_MAX_CHARS:
             tip(title_lbl, full_title)
 
@@ -263,12 +266,13 @@ class MiniVault(ctk.CTkToplevel):
         if age_t:
             ctk.CTkLabel(title_row, text=age_t,
                           font=ui_font(9, family=None),
-                          text_color=age_c).pack(side="right")
+                          text_color=age_c).pack(side=side_end())
 
         if entry.get("username"):
             ctk.CTkLabel(inner, text=entry.get("username", ""),
                           font=ui_font(10),
-                          text_color=TEXT_SEC, anchor="w").pack(
+                          text_color=TEXT_SEC,
+                          anchor=anchor_start()).pack(
                 fill="x", pady=(1, 4))
         else:
             ctk.CTkFrame(inner, height=4,
@@ -278,24 +282,24 @@ class MiniVault(ctk.CTkToplevel):
         btn_row.pack(fill="x")
 
         cp_user = ctk.CTkButton(
-            btn_row, text="📋 User", height=24, width=70,
+            btn_row, text=t("📋 User"), height=24, width=70,
             font=ui_font(10),
             fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
             text_color=TEXT_PRI,
             command=lambda: self._mini_copy(entry.get("username", ""),
                                             cp_user))
-        cp_user.pack(side="left", padx=(0, 4))
-        tip(cp_user, "Copy username to clipboard")
+        cp_user.pack(side=side_start(), padx=pad(0, 4))
+        tip(cp_user, t("Copy username to clipboard"))
 
         cp_pass = ctk.CTkButton(
-            btn_row, text="🔑 Pass", height=24, width=70,
+            btn_row, text=t("🔑 Pass"), height=24, width=70,
             font=ui_font(10),
             fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=6,
             text_color=TEXT_ON_ACCENT,
             command=lambda: self._mini_copy(entry.get("password", ""),
                                             cp_pass))
-        cp_pass.pack(side="left", padx=(0, 4))
-        tip(cp_pass, "Copy password to clipboard")
+        cp_pass.pack(side=side_start(), padx=pad(0, 4))
+        tip(cp_pass, t("Copy password to clipboard"))
 
         # URL button (only if URL exists)
         url = entry.get("url", "")
@@ -306,8 +310,8 @@ class MiniVault(ctk.CTkToplevel):
                 fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
                 text_color=TEAL,
                 command=lambda u=url: self.app._open_url(u))
-            url_btn.pack(side="left", padx=(0, 4))
-            tip(url_btn, f"Open {url}")
+            url_btn.pack(side=side_start(), padx=pad(0, 4))
+            tip(url_btn, t("Open {url}", url=url))
 
         edit_btn = ctk.CTkButton(
             btn_row, text="✏️", height=24, width=36,
@@ -315,8 +319,8 @@ class MiniVault(ctk.CTkToplevel):
             fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
             text_color=TEXT_SEC,
             command=lambda: self._mini_edit(entry))
-        edit_btn.pack(side="right")
-        tip(edit_btn, "Edit this entry")
+        edit_btn.pack(side=side_end())
+        tip(edit_btn, t("Edit this entry"))
 
         # Apply right-click binding to card + ALL children recursively.
         # Done synchronously here (the card is fully built above) — no

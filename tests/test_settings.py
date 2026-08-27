@@ -99,6 +99,26 @@ class LoadSettingsTests(unittest.TestCase):
         self.assertEqual(self.settings.load_settings(),
                          self.settings.DEFAULT_SETTINGS)
 
+    def test_lockout_state_survives_a_reload(self):
+        # The streak and the deadline are what stop a restart from handing
+        # an attacker a fresh set of attempts, so they have to round-trip.
+        self._write({"failed_streak": 12, "lockout_until": 1893456000})
+        loaded = self.settings.load_settings()
+        self.assertEqual(loaded["failed_streak"], 12)
+        self.assertEqual(loaded["lockout_until"], 1893456000)
+
+    def test_negative_lockout_state_falls_back_to_default(self):
+        self._write({"failed_streak": -1, "lockout_until": -5})
+        loaded = self.settings.load_settings()
+        self.assertEqual(loaded["failed_streak"], 0)
+        self.assertEqual(loaded["lockout_until"], 0)
+
+    def test_non_integer_lockout_state_falls_back_to_default(self):
+        self._write({"failed_streak": "many", "lockout_until": True})
+        loaded = self.settings.load_settings()
+        self.assertEqual(loaded["failed_streak"], 0)
+        self.assertEqual(loaded["lockout_until"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

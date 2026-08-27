@@ -72,25 +72,30 @@ TT_BG: Color = ("#3a3a3c", "#48484a")
 TT_FG: Color = ("#ffffff", "#ffffff")
 
 # ─── Card Color Presets (subtle tints) ───────────────────────
+# The strip is a (light, dark) pair like every other color here. It used to
+# be one value tuned against a dark card, so in light mode the accent sat on
+# a pale tint at nearly the same luminance and the strip read as a bright
+# smear rather than an edge. The light values are the darker, more saturated
+# member of each iOS pair; the dark values are the originals.
 CARD_COLORS: dict[str, dict] = {
     "default": {"bg": ("#ffffff", "#2c2c2e"), "strip": None,
                 "label": "Default"},
-    "blue":    {"bg": ("#e8f0fe", "#22283a"), "strip": "#0a84ff",
-                "label": "Blue"},
-    "green":   {"bg": ("#e6f7ec", "#222e26"), "strip": "#30d158",
-                "label": "Green"},
-    "red":     {"bg": ("#fdebea", "#2e2426"), "strip": "#ff453a",
-                "label": "Red"},
-    "orange":  {"bg": ("#fdf1e3", "#2e2a24"), "strip": "#ff9f0a",
-                "label": "Orange"},
-    "purple":  {"bg": ("#f4eafc", "#28242e"), "strip": "#bf5af2",
-                "label": "Purple"},
-    "teal":    {"bg": ("#e6f6fd", "#22282e"), "strip": "#64d2ff",
-                "label": "Teal"},
-    "yellow":  {"bg": ("#fdf8e0", "#2e2d22"), "strip": "#ffd60a",
-                "label": "Yellow"},
-    "pink":    {"bg": ("#fdeaee", "#2e2428"), "strip": "#ff6482",
-                "label": "Pink"},
+    "blue":    {"bg": ("#e8f0fe", "#22283a"),
+                "strip": ("#0062cc", "#0a84ff"), "label": "Blue"},
+    "green":   {"bg": ("#e6f7ec", "#222e26"),
+                "strip": ("#248a3d", "#30d158"), "label": "Green"},
+    "red":     {"bg": ("#fdebea", "#2e2426"),
+                "strip": ("#d70015", "#ff453a"), "label": "Red"},
+    "orange":  {"bg": ("#fdf1e3", "#2e2a24"),
+                "strip": ("#c93400", "#ff9f0a"), "label": "Orange"},
+    "purple":  {"bg": ("#f4eafc", "#28242e"),
+                "strip": ("#8944ab", "#bf5af2"), "label": "Purple"},
+    "teal":    {"bg": ("#e6f6fd", "#22282e"),
+                "strip": ("#0071a4", "#64d2ff"), "label": "Teal"},
+    "yellow":  {"bg": ("#fdf8e0", "#2e2d22"),
+                "strip": ("#a05a00", "#ffd60a"), "label": "Yellow"},
+    "pink":    {"bg": ("#fdeaee", "#2e2428"),
+                "strip": ("#d30f45", "#ff6482"), "label": "Pink"},
 }
 
 def resolve(color) -> str:

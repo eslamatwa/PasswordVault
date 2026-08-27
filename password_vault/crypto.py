@@ -165,8 +165,15 @@ def load_data(key: bytes) -> dict:
                   "load.", size)
         raise ValueError("Vault file is too large to be valid.")
     with open(DATA_FILE, "rb") as f:
-        data = decrypt_data(f.read(), key)
-    schema_changed = False  # only true for structural upgrades, not trash GC
+        raw = decrypt_data(f.read(), key)
+    # The ciphertext is authenticated, so this only guards against a vault
+    # written by a different version or a bug — not against tampering.
+    data = normalize_vault(raw)
+    # normalize_vault fills the container keys in, so ask the raw payload
+    # whether this load is actually a structural upgrade.
+    schema_changed = (not isinstance(raw, dict)
+                      or "trash" not in raw
+                      or "categories" not in raw)
     now_iso = datetime.datetime.now().isoformat()
     for entry in data.get("entries", []):
         if "id" not in entry:
@@ -184,10 +191,6 @@ def load_data(key: bytes) -> dict:
         if "pinned" not in entry:
             entry["pinned"] = False
             schema_changed = True
-    if "trash" not in data:
-        data["trash"] = []
-        schema_changed = True
-
     # Take a one-time backup before the first schema migration overwrites
     # the original ciphertext.
     if schema_changed:
@@ -231,6 +234,40 @@ def load_data(key: bytes) -> dict:
 
 BACKUP_FORMAT = "PasswordVault-Backup"
 BACKUP_VERSION = 1
+
+# Default category list, used when a backup predates the field or was
+# hand-edited without it.
+DEFAULT_CATEGORIES = ["General", "Social", "Work", "Banking"]
+
+
+def normalize_vault(data) -> dict:
+    """Return *data* as a usable vault dict, or raise ``ValueError``.
+
+    A decrypted backup is only as trustworthy as the file it came from: a
+    hand-edited or truncated one can decrypt cleanly and still be the wrong
+    shape. Restoring used to assign it straight onto the live vault, so the
+    mismatch only surfaced later as a ``KeyError`` in the UI — after the
+    file had been written and, at login, after the salt had been rotated.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Backup does not contain a vault.")
+    entries = data.get("entries", [])
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) for e in entries):
+        raise ValueError("Backup has a malformed entry list.")
+    categories = data.get("categories")
+    if not isinstance(categories, list) or not all(
+            isinstance(c, str) for c in categories):
+        categories = list(DEFAULT_CATEGORIES)
+    trash = data.get("trash")
+    if not isinstance(trash, list) or not all(
+            isinstance(t, dict) for t in trash):
+        trash = []
+    clean = dict(data)
+    clean["entries"] = entries
+    clean["categories"] = categories
+    clean["trash"] = trash
+    return clean
 
 
 def export_encrypted_backup(data: dict, backup_password: str,
@@ -323,5 +360,9 @@ def import_encrypted_backup(filepath: str,
         # Wrong password OR tampered ciphertext — same opaque error
         # so we don't leak which.
         raise ValueError("Wrong password or corrupted backup.") from exc
-    return json.loads(plaintext.decode())
+    try:
+        payload = json.loads(plaintext.decode())
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("Backup contents are not readable.") from exc
+    return normalize_vault(payload)
 
