@@ -1,0 +1,3 @@
+url,username,password,totp,extra,name,grouping,fav
+https://bank.example.com,acct123,bank-p4ss,,security questions,Bank,Finance,1
+https://shop.example.com,shopper,shop-p4ss,LPTOTPSECRET,,Shop,Shopping,0

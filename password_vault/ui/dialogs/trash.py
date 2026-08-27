@@ -8,30 +8,42 @@ import uuid
 
 import customtkinter as ctk
 
+from ...i18n import anchor_start, justify_start, pad, side_end, side_start, t
 from ...security import password_age_text
 from ...settings import TRASH_DAYS
 from ...theme import (
-    BG, BG_SEC, BG_TERT, CARD_HOVER, GREEN, GREEN_HOVER,
-    RED, RED_HOVER, TEXT_ON_GREEN, TEXT_PRI, TEXT_SEC, TEXT_TERT, cat_emoji,
+    BG_SEC, BG_TERT, CARD_HOVER, GREEN, GREEN_HOVER,
+    RED, RED_HOVER, TEXT_ON_GREEN, TEXT_PRI, TEXT_TERT, cat_emoji,
 )
-from ..widgets import modal_child, tip
+from ..widgets import dialog_header, tip
 
 log = logging.getLogger("PasswordVault")
+
+
+def _without(trash: list[dict], item: dict) -> list[dict]:
+    """Return *trash* with exactly *item* removed.
+
+    Matching on the id alone took every id-less row with it, so restoring
+    one entry deleted before ids existed silently discarded the rest of
+    them. Identity is the fallback whenever the id cannot single a row out.
+    """
+    item_id = item.get("id")
+    if item_id and sum(1 for t in trash if t.get("id") == item_id) == 1:
+        return [t for t in trash if t.get("id") != item_id]
+    return [t for t in trash if t is not item]
 
 
 def show(app) -> None:
     dlg = app._make_dialog("Recycle Bin", 460, 480)
 
     trash = app.data.get("trash", [])
-    title_lbl = ctk.CTkLabel(
-        dlg,
-        text=f"🗑️  Recycle Bin  ({len(trash)} items)",
-        font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
-        text_color=TEXT_PRI)
-    title_lbl.pack(pady=(14, 2))
+    title_lbl = dialog_header(
+        dlg, t("Recycle Bin  ({count} items)", count=len(trash)),
+        icon="🗑️", pady=(14, 2))
     ctk.CTkLabel(
         dlg,
-        text=f"Items are automatically deleted after {TRASH_DAYS} days",
+        text=t("Items are automatically deleted after {days} days",
+               days=TRASH_DAYS),
         font=ctk.CTkFont(size=10), text_color=TEXT_TERT).pack(
         pady=(0, 8))
 
@@ -46,9 +58,11 @@ def show(app) -> None:
         still claimed items after the last one was restored.
         """
         count = len(app.data.get("trash", []))
-        title_lbl.configure(text=f"🗑️  Recycle Bin  ({count} items)")
+        title_lbl.configure(
+            text=t("🗑️  Recycle Bin  ({count} items)", count=count))
         if count:
-            et_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+            et_btn.pack(side=side_start(), fill="x", expand=True,
+                        padx=pad(0, 4))
         else:
             et_btn.pack_forget()
 
@@ -58,7 +72,7 @@ def show(app) -> None:
         _update_header()
         trash_items = app.data.get("trash", [])
         if not trash_items:
-            ctk.CTkLabel(scroll, text="🗑️  Empty",
+            ctk.CTkLabel(scroll, text=t("🗑️  Empty"),
                           font=ctk.CTkFont(size=14),
                           text_color=TEXT_TERT).pack(pady=60)
             return
@@ -83,14 +97,14 @@ def show(app) -> None:
         ctk.CTkLabel(
             inner, text=f"{emoji}  {item.get('title', '')}",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            text_color=TEXT_PRI, anchor="w",
-            wraplength=380, justify="left").pack(fill="x")
+            text_color=TEXT_PRI, anchor=anchor_start(),
+            wraplength=380, justify=justify_start()).pack(fill="x")
 
         del_at = item.get("deleted_at", "")
         age_t, _ = password_age_text(del_at)
         ctk.CTkLabel(
             inner,
-            text=f"🗑️ Deleted {age_t}" if age_t else "",
+            text=t("🗑️ Deleted {age}", age=age_t) if age_t else "",
             font=ctk.CTkFont(size=10),
             text_color=TEXT_TERT).pack(fill="x", pady=(2, 4))
 
@@ -109,141 +123,74 @@ def show(app) -> None:
             if not it_copy.get("id") or it_copy["id"] in live_ids:
                 it_copy["id"] = str(uuid.uuid4())
             app.data["entries"].append(it_copy)
-            app.data["trash"] = [
-                t for t in app.data["trash"]
-                if t.get("id") != it.get("id")]
+            app.data["trash"] = _without(app.data["trash"], it)
             app._save_guarded()
             app.refresh_categories()
             app.refresh_entries()
             _drop_card(card)
 
         def perm_del(it=item, card=card):
-            confirm = ctk.CTkToplevel(dlg)
-            confirm.title("Delete Forever")
-            confirm.geometry("340x180")
-            confirm.resizable(False, False)
-            confirm.configure(fg_color=BG)
-            modal_child(dlg, confirm)
-            app._center(confirm, 340, 180)
-            confirm.bind("<Escape>", lambda _e: confirm.destroy())
-
-            ctk.CTkLabel(
-                confirm, text="⚠️  Delete Forever?",
-                font=ctk.CTkFont(family="Segoe UI", size=16,
-                                  weight="bold"),
-                text_color=TEXT_PRI).pack(pady=(18, 4))
-            ctk.CTkLabel(
-                confirm,
-                text=f'"{it.get("title", "")}"\n'
-                     f"This cannot be undone.",
-                font=ctk.CTkFont(size=12),
-                text_color=TEXT_SEC, justify="center").pack(pady=(0, 14))
-
-            cbf = ctk.CTkFrame(confirm, fg_color="transparent")
-            cbf.pack(fill="x", padx=24)
-
-            def do_perm():
-                app.data["trash"] = [
-                    t for t in app.data["trash"]
-                    if t.get("id") != it.get("id")]
+            def do_perm(confirm):
+                app.data["trash"] = _without(app.data["trash"], it)
                 app._save_guarded()
                 confirm.destroy()
                 _drop_card(card)
 
-            ctk.CTkButton(
-                cbf, text="Delete", fg_color=RED,
-                hover_color=RED_HOVER, width=130, height=34,
-                font=ctk.CTkFont(size=13), corner_radius=10,
-                command=do_perm).pack(side="left", padx=4)
-            cancel = ctk.CTkButton(
-                cbf, text="Cancel", fg_color=BG_TERT,
-                hover_color=CARD_HOVER, width=130, height=34,
-                font=ctk.CTkFont(size=13), corner_radius=10,
-                command=confirm.destroy)
-            cancel.pack(side="right", padx=4)
-            # Enter cancels; permanent deletion takes a deliberate click.
-            confirm.bind("<Return>", lambda _e: confirm.destroy())
-            cancel.focus()
+            app._confirm(
+                "Delete Forever?",
+                t('"{title}"\nThis cannot be undone.',
+              title=it.get("title", "")),
+                icon="⚠️", confirm_text="Delete", on_confirm=do_perm,
+                window_title="Delete Forever", size=(340, 190))
 
         r_btn = ctk.CTkButton(
-            brow, text="♻️ Restore", height=26,
+            brow, text=t("♻️ Restore"), height=26,
             font=ctk.CTkFont(size=10), fg_color=GREEN,
             hover_color=GREEN_HOVER, text_color=TEXT_ON_GREEN,
             corner_radius=6, command=restore)
-        r_btn.pack(side="left", padx=(0, 4))
-        tip(r_btn, "Restore this entry back to the vault")
+        r_btn.pack(side=side_start(), padx=pad(0, 4))
+        tip(r_btn, t("Restore this entry back to the vault"))
 
         d_btn = ctk.CTkButton(
-            brow, text="🗑️ Delete Forever", height=26,
+            brow, text=t("🗑️ Delete Forever"), height=26,
             font=ctk.CTkFont(size=10), fg_color=RED,
             hover_color=RED_HOVER, corner_radius=6,
             command=perm_del)
-        d_btn.pack(side="left")
-        tip(d_btn, "Permanently delete this entry")
+        d_btn.pack(side=side_start())
+        tip(d_btn, t("Permanently delete this entry"))
 
     bot = ctk.CTkFrame(dlg, fg_color="transparent")
     bot.pack(fill="x", padx=14, pady=(0, 12))
 
     def empty_trash():
-        confirm = ctk.CTkToplevel(dlg)
-        confirm.title("Empty Trash")
-        confirm.geometry("340x170")
-        confirm.resizable(False, False)
-        confirm.configure(fg_color=BG)
-        modal_child(dlg, confirm)
-        app._center(confirm, 340, 170)
-
-        ctk.CTkLabel(confirm, text="⚠️  Empty Recycle Bin?",
-                      font=ctk.CTkFont(family="Segoe UI", size=16,
-                                        weight="bold"),
-                      text_color=TEXT_PRI).pack(pady=(18, 4))
-        ctk.CTkLabel(
-            confirm,
-            text=f"Permanently delete all "
-                 f"{len(app.data.get('trash', []))} "
-                 f"items?\nThis action cannot be undone.",
-            font=ctk.CTkFont(size=12),
-            text_color=TEXT_SEC, justify="center").pack(pady=(0, 14))
-
-        cbf = ctk.CTkFrame(confirm, fg_color="transparent")
-        cbf.pack(fill="x", padx=24)
-
-        def do_empty():
+        def do_empty(confirm):
             app.data["trash"] = []
             app._save_guarded()
             log.info("Recycle bin emptied.")
             confirm.destroy()
             refresh_list()
 
-        ctk.CTkButton(
-            cbf, text="Delete All", fg_color=RED,
-            hover_color=RED_HOVER, width=130, height=34,
-            font=ctk.CTkFont(size=13), corner_radius=10,
-            command=do_empty).pack(side="left", padx=4)
-        cancel = ctk.CTkButton(
-            cbf, text="Cancel", fg_color=BG_TERT,
-            hover_color=CARD_HOVER, width=130, height=34,
-            font=ctk.CTkFont(size=13), corner_radius=10,
-            command=confirm.destroy)
-        cancel.pack(side="right", padx=4)
-        confirm.bind("<Escape>", lambda _e: confirm.destroy())
-        # Enter cancels; emptying the bin takes a deliberate click.
-        confirm.bind("<Return>", lambda _e: confirm.destroy())
-        cancel.focus()
+        app._confirm(
+            "Empty Recycle Bin?",
+            t("Permanently delete all {count} items?\nThis action "
+              "cannot be undone.",
+              count=len(app.data.get("trash", []))),
+            icon="⚠️", confirm_text="Delete All", on_confirm=do_empty,
+            window_title="Empty Trash", size=(340, 190))
 
     et_btn = ctk.CTkButton(
-        bot, text="🗑️  Empty Trash", height=34,
+        bot, text=t("🗑️  Empty Trash"), height=34,
         font=ctk.CTkFont(size=12, weight="bold"),
         fg_color=RED, hover_color=RED_HOVER,
         corner_radius=10, command=empty_trash)
-    tip(et_btn, "Permanently delete all items in trash")
+    tip(et_btn, t("Permanently delete all items in trash"))
 
     ctk.CTkButton(
-        bot, text="Close", height=34,
+        bot, text=t("Close"), height=34,
         font=ctk.CTkFont(size=12), fg_color=BG_TERT,
         hover_color=CARD_HOVER, corner_radius=10,
         command=dlg.destroy).pack(
-        side="right", fill="x", expand=True, padx=(4, 0))
+        side=side_end(), fill="x", expand=True, padx=pad(4, 0))
 
     # Last: the first render also decides whether Empty Trash is shown.
     refresh_list()

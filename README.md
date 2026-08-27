@@ -9,13 +9,13 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 ## ✨ Features
 
 ### 🔒 Security
-- **AES-256 Encryption (Fernet)** — All passwords are encrypted locally using `cryptography` library.
+- **Authenticated Encryption (Fernet)** — All passwords are encrypted locally using the `cryptography` library. Fernet is AES-128-CBC for confidentiality plus HMAC-SHA256 for integrity, so a tampered vault fails to open instead of decrypting to garbage.
 - **PBKDF2HMAC Key Derivation** — Master password is hashed with 480,000 iterations of SHA-256.
-- **Brute Force Protection** — Configurable max login attempts (3–15) with lockout duration (15s–5min).
+- **Brute Force Protection** — Configurable max login attempts (3–15) with lockout duration (15s–5min), escalating with the failure streak. The streak and the deadline are persisted, so closing and reopening the app does not clear a lockout. This protects the login screen only — an attacker holding a copy of `vault.dat` attacks it offline, where the 480,000 KDF iterations are the real defence.
 - **Auto-Lock** — Vault automatically locks after a configurable period of inactivity (1–30 min or Never).
 - **Auto-Clear Clipboard** — Optionally clear copied passwords from clipboard after 10–60 seconds.
 - **Atomic File Saves** — Data is written to a temp file first, preventing corruption on crash.
-- **Master Password Validation** — Enforces minimum 8 characters, uppercase, lowercase, and digits.
+- **Master Password Validation** — Enforces minimum 12 characters, uppercase, lowercase, digits, and a strength score of Strong or better.
 - **Single Instance Lock** — Only one copy of the app can run, so two windows can never overwrite each other's vault.
 - **Security Dashboard** — Overall vault score plus weak, reused, and stale password reports.
 - **Breach Check** — Checks passwords against Have I Been Pwned using k-anonymity, so no password or full hash ever leaves the machine.
@@ -25,7 +25,8 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 - **Lock Hygiene** — Auto-lock closes every open dialog so no plaintext stays on screen.
 
 ### 🎨 User Interface
-- **Light & Dark Themes** — Full iOS-inspired palettes for both, switchable from Settings.
+- **Light & Dark Themes** — Full iOS-inspired palettes for both, switchable from Settings, or set to System to follow Windows.
+- **English & Arabic** — Switchable in Settings. Arabic mirrors the entire layout: the sidebar, every label anchor and every padding pair flip to read right-to-left. The window is rebuilt when the language changes, because Tk fixes those values when a widget is created.
 - **Card Color Customization** — Choose from 9 color presets (Blue, Green, Red, Orange, Purple, Teal, Yellow, Pink) for each entry.
 - **Default Card Color** — Set a default color for all new entries in Settings.
 - **Password Strength Meter** — Visual indicator shows password strength in real-time (Very Weak → Very Strong).
@@ -101,13 +102,35 @@ A complete iOS-style settings page with persistent configuration:
 | 📋 **Security** | Clear Clipboard | Off, or auto-clear after 10, 15, 30, 60 sec |
 | 📏 **Generator** | Default Length | Slider from 6 to 40 characters |
 | 🔤 **Generator** | Character Types | Toggle Uppercase / Lowercase / Digits / Symbols |
-| 🎨 **Appearance** | Theme | Light or Dark |
+| 🎨 **Appearance** | Theme | System, Light, or Dark |
+| 🌐 **Appearance** | Language | English or Arabic (العربية) — Arabic mirrors the layout right-to-left |
 | 🎨 **Appearance** | Default Card Color | Choose default color for new entries |
 | 🚀 **Behavior** | Start Minimized | Launch to floating widget instead of full window |
 
 Settings are validated on load: a value with the wrong type or outside its allowed range falls back to the default instead of breaking startup.
 
 All settings are saved to `%APPDATA%\PasswordVault\settings.json`.
+
+### 📥 Importing From Another Password Manager
+Exports from these applications are read directly — no reformatting needed:
+
+| Source | Recognised columns |
+|--------|--------------------|
+| Chrome / Edge | `name, url, username, password, note` |
+| Bitwarden | `folder, favorite, name, notes, fields, login_uri, login_username, login_password, login_totp` |
+| LastPass | `url, username, password, totp, extra, name, grouping, fav` |
+| 1Password | `Title, Url, Username, Password, OTPAuth, Favorite, Tags, Notes` |
+| KeePass | `Account, Login Name, Password, Web Site, Comments, Group` |
+| Firefox | `url, username, password, httpRealm, …` |
+
+The format is detected from the header row and shown in the import dialog,
+with a dropdown to override it if the guess is wrong. Folders, groupings and
+tags become categories; favourites become pinned entries.
+
+**Nothing is dropped in silence.** A TOTP secret or a custom field has no
+dedicated home in this app, so it is appended to the entry's notes under its
+original name rather than discarded. Any column that cannot be carried at all
+is listed in the dialog *before* you import.
 
 ### ℹ️ About Dialog
 - Version info, developer name, encryption details
@@ -208,7 +231,9 @@ PasswordVault/
 │   ├── security.py                  # Strength, age, duplicates, HIBP, score, generator
 │   ├── settings.py                  # Settings persistence + validation
 │   ├── theme.py                     # Light/dark palettes & card presets
+│   ├── i18n.py                      # Translation catalog + RTL direction helpers
 │   ├── export_import.py             # CSV & Excel export/import helpers
+│   ├── import_profiles.py           # Column maps for other password managers
 │   ├── instance_lock.py             # Single-instance mutex / lock file
 │   └── ui/
 │       ├── __init__.py
@@ -252,7 +277,7 @@ PasswordVault/
 | Package | Purpose |
 |---------|---------|
 | `customtkinter` | Modern UI framework (light/dark) |
-| `cryptography` | AES encryption (Fernet + PBKDF2) |
+| `cryptography` | Authenticated encryption (Fernet + PBKDF2) |
 | `pyperclip` | Clipboard copy/paste |
 | `openpyxl` | Excel (.xlsx) export/import |
 | `pytest` | Test runner (dev only) |
@@ -269,17 +294,31 @@ python -m pytest -q          # unit tests
 python -m pyflakes main.py password_vault tests
 ```
 
-The suite covers encryption round-trips and schema migration, restore rollback,
-CSV/Excel import-export fidelity and formula escaping, URL scheme validation,
-password strength/age/duplicate/score logic, generator length handling,
-settings validation, the single-instance lock, and the pure UI helpers. The
+The suite covers encryption round-trips and schema migration, the vault shape
+guard, restore rollback, CSV/Excel import-export fidelity and formula escaping,
+one fixture per supported import format, URL scheme validation, password
+strength/age/duplicate/score logic, generator length handling, settings
+validation, the persisted lockout state, the single-instance lock, and the pure
+UI helpers.
+
+Two of them are worth calling out:
+
+- **`test_dialogs_smoke.py`** opens every dialog in both themes and both
+  languages and asserts each one is actually mapped, not merely constructed.
+  It also covers the modal grab stack, the rule that `Enter` never confirms a
+  destructive action, and that auto-lock leaves no window on screen.
+- **`test_i18n_coverage.py`** fails on any user-facing string that does not
+  reach the translator, any string with no Arabic entry, and any catalog key
+  nothing uses. An untranslated string is invisible in English, so the check
+  has to be static.
+
 Tk-dependent tests skip themselves automatically when no display is available.
 
 ---
 
 ## 🔒 Security Notes
 
-- All data is stored **locally** in `vault.dat` (AES-256 encrypted).
+- All data is stored **locally** in `vault.dat`, encrypted with Fernet (AES-128-CBC + HMAC-SHA256).
 - Encryption salt is stored in `vault.salt` (32-byte, backwards-compatible with 16-byte).
 - The encryption key is derived from your **Master Password** using PBKDF2HMAC (SHA-256, 480K iterations).
 - **Constant-time comparison** (`hmac.compare_digest`) is used for master password verification to prevent timing attacks.

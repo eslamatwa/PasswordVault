@@ -27,6 +27,10 @@ PASSWORD_AGE_WARNING = 90
 # Appearance modes, in the order they appear in Settings.
 THEME_MODES = ("System", "Dark", "Light")
 
+# Interface languages. Kept here rather than imported from i18n so that
+# settings stays free of UI imports and can be loaded before anything else.
+LANGUAGE_CODES = ("English", "Arabic")
+
 DEFAULT_SETTINGS: dict = {
     "auto_lock_minutes": 5,
     "gen_length": 16,
@@ -40,7 +44,18 @@ DEFAULT_SETTINGS: dict = {
     "lockout_seconds": 30,
     "clipboard_clear_seconds": 30,
     "theme": "Dark",
+    "language": "English",
+    # Brute-force state, persisted so closing and reopening the app does
+    # not hand an attacker a fresh set of attempts. It lives here rather
+    # than in the vault because it has to be readable while locked.
+    "failed_streak": 0,
+    "lockout_until": 0,
 }
+
+# Ceiling for a stored lockout deadline, in seconds from now. A saved
+# absolute timestamp cannot be trusted on its own: moving the system clock
+# forward and back would otherwise leave the vault locked for years.
+MAX_LOCKOUT_HORIZON = 1800
 
 # key -> (expected type, extra check or None). Anything not listed here is
 # not a setting this version understands.
@@ -57,6 +72,9 @@ _SPEC: dict[str, tuple] = {
     "lockout_seconds": (int, lambda v: 0 <= v <= 24 * 3600),
     "clipboard_clear_seconds": (int, lambda v: 0 <= v <= 3600),
     "theme": (str, lambda v: v in THEME_MODES),
+    "language": (str, lambda v: v in LANGUAGE_CODES),
+    "failed_streak": (int, lambda v: 0 <= v <= 100000),
+    "lockout_until": (int, lambda v: v >= 0),
 }
 
 

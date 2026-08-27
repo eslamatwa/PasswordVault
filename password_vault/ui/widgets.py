@@ -8,8 +8,9 @@ import functools
 import tkinter as tk
 import customtkinter as ctk
 
+from ..i18n import anchor_start, justify_start, pad, side_end, side_start, t
 from ..theme import (
-    BG_GROUP, BG_SEC, BG_TERT, SEPARATOR, ACCENT, ACCENT_HOVER,
+    BG_GROUP, BG_SEC, BG_TERT, CARD_HOVER, SEPARATOR, ACCENT, ACCENT_HOVER,
     INPUT_BG, TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
     TT_BG, TT_FG, cat_emoji, menu_style, resolve,
 )
@@ -31,27 +32,10 @@ def ui_font(size: int = 12, weight: str = "normal",
     return ctk.CTkFont(size=size, weight=weight)
 
 
-def modal_child(parent, win) -> None:
-    """Make *win* modal over *parent* and hand the grab back on close.
-
-    Tk keeps a single grab per display, so a nested dialog taking one left
-    the dialog underneath it non-modal after the child closed.
-    """
-    win.transient(parent)
-    win.grab_set()
-
-    def _restore(event):
-        # The toplevel is in every child's bindtags, so <Destroy> also
-        # arrives here for each child widget.
-        if event.widget is not win:
-            return
-        try:
-            if parent.winfo_exists():
-                parent.grab_set()
-        except tk.TclError:
-            pass
-
-    win.bind("<Destroy>", _restore, add="+")
+# `modal_child` used to live here: a second, parallel way to take the grab,
+# used only by the Recycle Bin's nested confirmations. Those went through
+# `app._confirm` instead, which routes every dialog through the one
+# `_grab_stack`, so the divergence is gone rather than documented.
 
 
 _SEARCH_FIELDS = ("title", "username", "url", "category", "notes")
@@ -135,7 +119,8 @@ class Tooltip:
         frame = tk.Frame(tw, bg=bg, padx=10, pady=5)
         frame.pack()
         tk.Label(frame, text=self.text, bg=bg, fg=fg,
-                 font=("Segoe UI", 10), wraplength=220, justify="left").pack()
+                 font=("Segoe UI", 10), wraplength=220,
+                 justify=justify_start()).pack()
         tw.update_idletasks()
         tw_w = tw.winfo_reqwidth()
         x = x - tw_w // 2
@@ -207,15 +192,92 @@ def sort_entries_pinned_first(entries: list[dict]) -> list[dict]:
                         e.get("title", "").lower()))
 
 
+# ─── Dialog Chrome ───────────────────────────────────────────
+def dialog_header(parent, title: str, *, icon: str | None = None,
+                  subtitle: str | None = None, size: int = 16,
+                  big_icon: bool = False, pady: tuple = (14, 6)):
+    """Draw the standard dialog header and return its title label.
+
+    Every dialog opened with one of these repeated the same three labels by
+    hand, at a slightly different size each time. The label is returned
+    because a few headers carry a live count.
+
+    With *big_icon* the icon gets its own oversized line above the title,
+    which is how the short confirmation dialogs present it.
+    """
+    # Translated here rather than at every call site: these helpers are
+    # the single point every dialog's chrome passes through, and t() on an
+    # already-translated string is a no-op.
+    title = t(title)
+    if subtitle is not None:
+        subtitle = t(subtitle)
+    if icon and big_icon:
+        ctk.CTkLabel(parent, text=icon,
+                      font=ctk.CTkFont(size=30)).pack(pady=(pady[0], 2))
+        text = title
+        title_pady = (0, 0)
+    else:
+        text = f"{icon}  {title}" if icon else title
+        title_pady = pady if subtitle is None else (pady[0], 2)
+
+    label = ctk.CTkLabel(
+        parent, text=text,
+        font=ctk.CTkFont(family="Segoe UI", size=size, weight="bold"),
+        text_color=TEXT_PRI)
+    label.pack(pady=title_pady)
+    if subtitle is not None:
+        ctk.CTkLabel(
+            parent, text=subtitle,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color=TEXT_SEC, wraplength=310,
+            justify="center").pack(padx=18, pady=(0, pady[1]))
+    return label
+
+
+def button_row(parent, buttons: list[dict], *, padx: int = 24,
+               pady: tuple = (0, 0), height: int = 36):
+    """Pack a row of dialog buttons and return them keyed by ``name``.
+
+    Each spec takes ``text`` and ``command``, plus any of ``name`` (the key
+    in the returned dict), ``side`` ("left"/"right", default "left"),
+    ``fg_color``/``hover_color``/``text_color``, ``width``, and ``expand``.
+    """
+    row = ctk.CTkFrame(parent, fg_color="transparent")
+    row.pack(fill="x", padx=padx, pady=pady)
+    made: dict = {}
+    for spec in buttons:
+        expand = spec.get("expand", False)
+        btn = ctk.CTkButton(
+            row, text=t(spec["text"]), height=height,
+            width=spec.get("width", 140),
+            font=ctk.CTkFont(family="Segoe UI", size=spec.get("size", 13),
+                              weight=spec.get("weight", "normal")),
+            fg_color=spec.get("fg_color", BG_TERT),
+            hover_color=spec.get("hover_color", CARD_HOVER),
+            text_color=spec.get("text_color", TEXT_PRI),
+            corner_radius=spec.get("corner_radius", 10),
+            command=spec["command"])
+        # "start"/"end" rather than left/right: a confirm row reads
+        # Delete | Cancel in both directions.
+        side = spec.get("side", "start")
+        side = {"left": side_start(), "start": side_start(),
+                "right": side_end(), "end": side_end()}.get(side, side)
+        btn.pack(side=side, padx=spec.get("padx", 4),
+                 fill="x" if expand else None, expand=expand)
+        if spec.get("name"):
+            made[spec["name"]] = btn
+    return made
+
+
 # ─── iOS Group / Field Helpers ───────────────────────────────
 def ios_group(parent, title: str | None = None, compact: bool = False):
     wrapper = ctk.CTkFrame(parent, fg_color="transparent")
     wrapper.pack(fill="x", pady=(0, 4 if compact else 8))
     if title:
-        ctk.CTkLabel(wrapper, text=title.upper(),
+        ctk.CTkLabel(wrapper, text=t(title).upper(),
                       font=ctk.CTkFont(family="Segoe UI", size=10),
-                      text_color=TEXT_SEC, anchor="w").pack(
-            anchor="w", padx=14, pady=(0, 2))
+                      text_color=TEXT_SEC, anchor=anchor_start()).pack(
+            anchor=anchor_start(), padx=14, pady=(0, 2))
     group = ctk.CTkFrame(wrapper, fg_color=BG_GROUP, corner_radius=10)
     group.pack(fill="x")
     return group
@@ -224,19 +286,21 @@ def ios_group(parent, title: str | None = None, compact: bool = False):
 def ios_field(group, label: str, idx: int = 0, show: str = "",
               placeholder: str = "", value: str = "",
               height: int = 34, is_textbox: bool = False):
+    label, placeholder = t(label), t(placeholder) if placeholder else ""
     if idx > 0:
         ctk.CTkFrame(group, height=1, fg_color=SEPARATOR).pack(
             fill="x", padx=(46, 0))
     row = ctk.CTkFrame(group, fg_color="transparent")
     row.pack(fill="x", padx=12, pady=(4 if idx == 0 else 3, 4))
     ctk.CTkLabel(row, text=label, font=ctk.CTkFont(family="Segoe UI", size=12),
-                  text_color=TEXT_PRI, width=72, anchor="w").pack(side="left")
+                  text_color=TEXT_PRI, width=72,
+                  anchor=anchor_start()).pack(side=side_start())
     if is_textbox:
         tb = ctk.CTkTextbox(row, height=height,
                              font=ctk.CTkFont(family="Segoe UI", size=12),
                              fg_color=INPUT_BG, border_width=0,
                              corner_radius=6, text_color=TEXT_PRI)
-        tb.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        tb.pack(side=side_start(), fill="x", expand=True, padx=pad(4, 0))
         if value:
             tb.insert("1.0", value)
         return tb
@@ -245,27 +309,29 @@ def ios_field(group, label: str, idx: int = 0, show: str = "",
                           fg_color=INPUT_BG, border_width=0, corner_radius=6,
                           placeholder_text=placeholder, text_color=TEXT_PRI,
                           **({} if not show else {"show": show}))
-    entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+    entry.pack(side=side_start(), fill="x", expand=True, padx=pad(4, 0))
     if value:
         entry.insert(0, value)
     return entry
 
 
 def ios_combo(group, label: str, values: list[str], current: str, idx: int = 0):
+    label = t(label)
     if idx > 0:
         ctk.CTkFrame(group, height=1, fg_color=SEPARATOR).pack(
             fill="x", padx=(46, 0))
     row = ctk.CTkFrame(group, fg_color="transparent")
     row.pack(fill="x", padx=12, pady=(4 if idx == 0 else 3, 4))
     ctk.CTkLabel(row, text=label, font=ctk.CTkFont(family="Segoe UI", size=12),
-                  text_color=TEXT_PRI, width=72, anchor="w").pack(side="left")
+                  text_color=TEXT_PRI, width=72,
+                  anchor=anchor_start()).pack(side=side_start())
     cb = ctk.CTkComboBox(row, values=values, height=30,
                           font=ctk.CTkFont(family="Segoe UI", size=12),
                           fg_color=INPUT_BG, border_width=0, corner_radius=6,
                           button_color=ACCENT, button_hover_color=ACCENT_HOVER,
                           dropdown_fg_color=BG_SEC, text_color=TEXT_PRI,
                           dropdown_text_color=TEXT_PRI)
-    cb.pack(side="left", fill="x", expand=True, padx=(4, 0))
+    cb.pack(side=side_start(), fill="x", expand=True, padx=pad(4, 0))
     if current:
         cb.set(current)
     return cb
@@ -281,19 +347,20 @@ def make_search_bar(parent, search_var, categories, on_category,
     frame.pack_propagate(False)
 
     ctk.CTkLabel(frame, text="🔍", font=ctk.CTkFont(size=12), width=24,
-                  text_color=TEXT_SEC).pack(side="left", padx=(8, 0))
+                  text_color=TEXT_SEC).pack(side=side_start(),
+                                            padx=pad(8, 0))
 
     entry = ctk.CTkEntry(frame, textvariable=search_var, height=height - 4,
-                          placeholder_text="Search passwords...",
+                          placeholder_text=t("Search passwords..."),
                           font=ctk.CTkFont(family="Segoe UI", size=12),
                           fg_color="transparent", border_width=0,
                           text_color=TEXT_PRI, placeholder_text_color=TEXT_TERT)
-    entry.pack(side="left", fill="x", expand=True, padx=(2, 0))
+    entry.pack(side=side_start(), fill="x", expand=True, padx=pad(2, 0))
     frame._entry = entry  # store reference for focus shortcut
 
     def show_cat_menu():
         menu = tk.Menu(frame, tearoff=0, **menu_style())
-        menu.add_command(label="🗂️  All",
+        menu.add_command(label=t("🗂️  All"),
                           command=lambda: on_category("All"))
         menu.add_separator()
         for cat in categories():
@@ -310,7 +377,7 @@ def make_search_bar(parent, search_var, categories, on_category,
                               font=ctk.CTkFont(size=10), fg_color="transparent",
                               hover_color=TEXT_QUAT, corner_radius=6,
                               text_color=TEXT_SEC, command=show_cat_menu)
-    cat_btn.pack(side="right", padx=(0, 4))
-    tip(cat_btn, "Filter by category")
+    cat_btn.pack(side=side_end(), padx=pad(0, 4))
+    tip(cat_btn, t("Filter by category"))
     return frame
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
+from ...i18n import anchor_end, anchor_start, side_end, side_start, t
 from ... import APP_VERSION, APP_AUTHOR
 from ...theme import (
     ACCENT, BG_TERT, CARD_HOVER, SEPARATOR,
@@ -23,7 +24,7 @@ def show(app) -> None:
                   fg_color="transparent").place(
         relx=0.5, rely=0.5, anchor="center")
 
-    ctk.CTkLabel(dlg, text="Password Vault",
+    ctk.CTkLabel(dlg, text=t("Password Vault"),
                   font=ctk.CTkFont(family="Segoe UI", size=22,
                                     weight="bold"),
                   text_color=TEXT_PRI).pack(pady=(0, 2))
@@ -43,23 +44,25 @@ def show(app) -> None:
                 fill="x", padx=(46, 0))
         row = ctk.CTkFrame(grp, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=5)
-        ctk.CTkLabel(row, text=f"{icon}  {label}",
+        ctk.CTkLabel(row, text=f"{icon}  {t(label)}",
                       font=ctk.CTkFont(family="Segoe UI", size=12),
-                      text_color=TEXT_SEC, anchor="w").pack(side="left")
+                      text_color=TEXT_SEC,
+                      anchor=anchor_start()).pack(side=side_start())
         ctk.CTkLabel(row, text=value,
                       font=ctk.CTkFont(family="Segoe UI", size=12,
                                         weight="bold"),
-                      text_color=TEXT_PRI, anchor="e").pack(side="right")
+                      text_color=TEXT_PRI,
+                      anchor=anchor_end()).pack(side=side_end())
 
     info_row(g, "📦", "Version", f"v{APP_VERSION}", idx=0)
     info_row(g, "👨‍💻", "Developer", APP_AUTHOR, idx=1)
-    info_row(g, "🛡️", "Encryption", "AES-256 (Fernet)", idx=2)
+    info_row(g, "🛡️", "Encryption", "Fernet (AES-128 + HMAC)", idx=2)
     info_row(g, "🔑", "Key Derivation", "PBKDF2-SHA256", idx=3)
     info_row(g, "📂", "Data Location", "%APPDATA%", idx=4)
 
     g2 = ios_group(dlg, "Features")
     features = [
-        "🔐  AES-256 encrypted local vault",
+        "🔐  Authenticated encrypted local vault",
         "🎲  Secure password generator",
         "🔒  Auto-lock & brute-force protection",
         "📋  Quick-copy with auto-clear clipboard",
@@ -77,11 +80,11 @@ def show(app) -> None:
                 fill="x", padx=(16, 0))
         ctk.CTkLabel(g2, text=feat,
                       font=ctk.CTkFont(family="Segoe UI", size=11),
-                      text_color=TEXT_PRI, anchor="w").pack(
+                      text_color=TEXT_PRI, anchor=anchor_start()).pack(
             fill="x", padx=12, pady=3)
 
     ctk.CTkButton(
-        dlg, text="Close", height=36, width=140,
+        dlg, text=t("Close"), height=36, width=140,
         font=ctk.CTkFont(family="Segoe UI", size=13),
         fg_color=BG_TERT, hover_color=CARD_HOVER, corner_radius=10,
         command=dlg.destroy).pack(pady=(14, 16))

@@ -6,15 +6,25 @@
 
 SECURITY
 --------
-  * AES-256 Encryption (Fernet) — all passwords encrypted locally
+  * Authenticated Encryption (Fernet) — AES-128-CBC for confidentiality plus
+    HMAC-SHA256 for integrity; a tampered vault fails to open rather than
+    decrypting to garbage
   * PBKDF2HMAC Key Derivation — 480,000 iterations of SHA-256
-  * Brute-Force Protection — configurable max attempts (3-15) + lockout (15s-5min)
+  * Brute-Force Protection — configurable max attempts (3-15) + lockout
+    (15s-5min), escalating with the failure streak. The streak and the
+    deadline persist across restarts, so quitting the app does not clear a
+    lockout. This guards the login screen only; an attacker holding a copy
+    of vault.dat attacks it offline, where the 480,000 KDF iterations are
+    the real defence
   * Auto-Lock — vault locks after inactivity (1-30 min or Never)
   * Auto-Clear Clipboard — clears copied passwords after 10-60 seconds (default 30s)
   * Atomic File Saves — prevents data corruption on crash
-  * Secure Memory Wipe — sensitive data zeroed out on lock
+  * Key Released On Lock — the master key and decrypted vault are dropped on
+    lock. Python strings are immutable, so the bytes cannot be overwritten
+    in place; the copies are reclaimed by the GC, not erased on demand
   * Restrictive File Permissions — vault files are owner-only access
-  * Master Password Validation — minimum 8 chars, uppercase, lowercase, digits
+  * Master Password Validation — minimum 12 chars, uppercase, lowercase and
+    digits, and a strength score of Strong or better
   * Constant-Time Comparison — prevents timing attacks on master password
   * Input Sanitization — SSH/RDP inputs sanitized to prevent command injection
   * Single Instance Lock — one running copy only, so two windows cannot
@@ -35,7 +45,11 @@ SECURITY
 
 USER INTERFACE
 --------------
-  * Light & Dark Themes — full iOS-inspired palettes, switchable in Settings
+  * Light & Dark Themes — full iOS-inspired palettes, switchable in Settings,
+    or set to System to follow the Windows setting
+  * English & Arabic — switchable in Settings. Arabic mirrors the whole
+    layout: the sidebar, every label anchor and every padding pair flip to
+    read right-to-left. The window is rebuilt when the language changes
   * Card Color Customization — 9 color presets (Blue, Green, Red, Orange, Purple, Teal, Yellow, Pink)
   * Default Card Color — set a default in Settings for all new entries
   * Password Strength Meter — real-time visual indicator (Very Weak -> Very Strong)
@@ -76,7 +90,8 @@ RIGHT-CLICK CONTEXT MENU
   * Available on every entry card (main vault + Mini Vault):
       - Copy Username / Copy Password
       - Open URL in Browser
-      - Open URL + Copy Username (auto-copies password after 3s)
+      - Open URL + Copy Username (the password is NOT auto-copied — use
+        Copy Password when you are ready to paste it)
       - Start SSH Session (PuTTY / MobaXterm / Windows SSH)
       - Start RDP Session (mstsc)
       - Edit Entry
@@ -91,11 +106,11 @@ SSH & RDP INTEGRATION
       - Username (auto-filled from entry)
       - Port selection (auto-detected from URL)
       - SSH Client chooser — auto-detects: PuTTY, MobaXterm, Windows OpenSSH
-      - Password auto-copied to clipboard on connect
+      - Password auto-copied to clipboard on connect, cleared after 10s
   * RDP Session Dialog:
       - Host/IP input (auto-filled from entry URL)
       - Username and port configuration
-      - Password auto-copied to clipboard on connect
+      - Password auto-copied to clipboard on connect, cleared after 10s
 
 
 FLOATING WIDGET & MINI VAULT
@@ -118,7 +133,8 @@ SETTINGS
       - Clear Clipboard: Off, or 10, 15, 30, 60 sec
       - Default Password Length: 6-40 characters
       - Character Types: Uppercase / Lowercase / Digits / Symbols
-      - Theme: Light or Dark
+      - Theme: System, Light, or Dark
+      - Language: English or Arabic (العربية)
       - Default Card Color
       - Start Minimized option
   * All settings saved to %APPDATA%\PasswordVault\settings.json
@@ -130,6 +146,12 @@ IMPORT & EXPORT
 ---------------
   * Export to CSV or Excel (XLSX)
   * Import from CSV or Excel, with a preview and a skip-duplicates option
+  * Import from other password managers — Chrome/Edge, Bitwarden, LastPass,
+    1Password, KeePass and Firefox. The format is detected from the header
+    row and shown in the dialog, with a dropdown to override it
+  * Nothing is dropped in silence — TOTP secrets and custom fields are kept
+    in the entry's notes, and any column with no home is named in the dialog
+    before you import
   * Round-trips categories, URLs, notes, timestamps and pinned state
   * Exported cells are escaped against spreadsheet formula injection
   * Data stays encrypted at rest — export is plaintext (use with care)

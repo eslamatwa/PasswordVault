@@ -10,12 +10,13 @@ import tkinter as tk
 
 import customtkinter as ctk
 
+from ...i18n import t
 from ...crypto import derive_key, get_or_create_salt, rotate_salt, save_data
 from ...security import password_strength
 from ...theme import (
-    BG_TERT, ORANGE, ORANGE_HOVER, RED, TEXT_PRI, TEXT_QUAT, TEXT_SEC,
+    BG_TERT, ORANGE, ORANGE_HOVER, RED, TEXT_QUAT, TEXT_SEC,
 )
-from ..widgets import ios_field, ios_group, tip
+from ..widgets import dialog_header, ios_field, ios_group, tip
 
 log = logging.getLogger("PasswordVault")
 
@@ -26,12 +27,8 @@ STRENGTH_DEBOUNCE_MS = 200
 def show(app) -> None:
     dlg = app._make_dialog("Change Master Password", 400, 400)
 
-    ctk.CTkLabel(dlg, text="🔑", font=ctk.CTkFont(size=32)).pack(
-        pady=(16, 2))
-    ctk.CTkLabel(
-        dlg, text="Change Master Password",
-        font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-        text_color=TEXT_PRI).pack(pady=(0, 10))
+    dialog_header(dlg, "Change Master Password", icon="🔑",
+                  size=15, big_icon=True, pady=(16, 10))
 
     frm = ctk.CTkFrame(dlg, fg_color="transparent")
     frm.pack(fill="both", expand=True, padx=18, pady=(0, 12))
@@ -88,7 +85,8 @@ def show(app) -> None:
         busy["on"] = on
         save_btn.configure(
             state="disabled" if on else "normal",
-            text="⏳  Re-encrypting…" if on else "Change Password")
+            text=(t("⏳  Re-encrypting…") if on
+                  else t("Change Password")))
 
     def save():
         if busy["on"]:
@@ -97,10 +95,10 @@ def show(app) -> None:
         np_ = new_e.get()
         cp = conf_e.get()
         if not op or not np_ or not cp:
-            err.configure(text="⚠️ Fill all fields")
+            err.configure(text=t("⚠️ Fill all fields"))
             return
         if np_ != cp:
-            err.configure(text="⚠️ New passwords don't match")
+            err.configure(text=t("⚠️ New passwords don't match"))
             return
         ve = app._validate_master_password(np_)
         if ve:
@@ -112,10 +110,20 @@ def show(app) -> None:
         # key against the new salt.
         app._flush_pending_save()
 
+        # Snapshot the key and the vault on the Tk thread. The worker must
+        # never read app.key / app.data itself: auto-lock clears both, and
+        # a lock landing mid-flight used to re-encrypt `None` — which
+        # serializes as "null" — over the whole vault.
+        old_key = app.key
+        vault = app.data
+        if old_key is None or vault is None:
+            err.configure(text=t("⚠️ The vault is locked"))
+            return
+
         salt = get_or_create_salt()
         new_salt = os.urandom(32)
         err.configure(text="")
-        status.configure(text="Deriving key and re-encrypting the vault…")
+        status.configure(text=t("Deriving key and re-encrypting the vault…"))
         set_busy(True)
 
         def finish(outcome: str):
@@ -127,10 +135,10 @@ def show(app) -> None:
             status.configure(text="")
             set_busy(False)
             if outcome == "bad_old":
-                err.configure(text="⚠️ Current password is wrong")
+                err.configure(text=t("⚠️ Current password is wrong"))
                 return
             if outcome != "ok":
-                err.configure(text="⚠️ Could not save — try again")
+                err.configure(text=t("⚠️ Could not save — try again"))
                 return
             dlg.destroy()
 
@@ -143,13 +151,12 @@ def show(app) -> None:
             # the new salt *must* reach disk, otherwise the stored vault can
             # no longer be opened by any password. Deferring that step to a
             # callback would tie it to the dialog still being alive.
-            old_key = app.key
             try:
                 if not hmac.compare_digest(derive_key(op, salt), old_key):
                     app.root.after(0, lambda: finish("bad_old"))
                     return
                 new_key = derive_key(np_, new_salt)
-                save_data(app.data, new_key)
+                save_data(vault, new_key)
             except (OSError, ValueError) as exc:
                 log.error("Re-encrypt during password change failed: %s",
                           exc, exc_info=True)
@@ -163,26 +170,34 @@ def show(app) -> None:
                 # the vault stays openable with the unchanged password.
                 log.error("Salt rotation failed: %s", exc, exc_info=True)
                 try:
-                    save_data(app.data, old_key)
+                    save_data(vault, old_key)
                 except (OSError, ValueError) as rb:
                     log.critical(
                         "Rollback after failed salt rotation failed: %s",
                         rb, exc_info=True)
                 app.root.after(0, lambda: finish("rotate_failed"))
                 return
-            app.key = new_key
+            # Only adopt the new key if the session is still the one that
+            # started the change. If the vault locked while this ran, the
+            # file and the salt are already consistent under the new
+            # password — the user simply unlocks with it.
+            if app.key is old_key:
+                app.key = new_key
+            else:
+                log.warning("Vault locked during the password change; the "
+                            "new password applies from the next unlock.")
             log.info("Master password changed; salt rotated.")
             app.root.after(0, lambda: finish("ok"))
 
         threading.Thread(target=work, daemon=True).start()
 
     save_btn = ctk.CTkButton(
-        frm, text="Change Password", height=38,
+        frm, text=t("Change Password"), height=38,
         font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
         fg_color=ORANGE, hover_color=ORANGE_HOVER, corner_radius=10,
         command=save)
     save_btn.pack(fill="x", padx=14)
-    tip(save_btn, "Save the new master password")
+    tip(save_btn, t("Save the new master password"))
     dlg.bind("<Return>", lambda _e: save())
 
     def close_if_idle(_e=None):

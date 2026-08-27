@@ -7,6 +7,7 @@ from __future__ import annotations
 import tkinter as tk
 import customtkinter as ctk
 
+from ..i18n import t
 from ..theme import ACCENT, menu_style, resolve
 
 
@@ -52,12 +53,12 @@ class FloatingWidget(ctk.CTkToplevel):
 
     def show_menu(self, e):
         menu = tk.Menu(self, tearoff=0, **menu_style())
-        menu.add_command(label="⬜  Open Full Vault",
+        menu.add_command(label=t("⬜  Open Full Vault"),
                           command=self.app.restore_window)
-        menu.add_command(label="📋  Mini Vault",
+        menu.add_command(label=t("📋  Mini Vault"),
                           command=self.app.toggle_mini_vault)
         menu.add_separator()
-        menu.add_command(label="✕  Exit", command=self._exit)
+        menu.add_command(label=t("✕  Exit"), command=self._exit)
         menu.post(e.x_root, e.y_root)
 
     def _exit(self):

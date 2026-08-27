@@ -169,6 +169,89 @@ class EncryptedBackupTests(unittest.TestCase):
             self.crypto.import_encrypted_backup(self.path, "BackupPass123"),
             VAULT)
 
+    def test_backup_of_the_wrong_shape_is_refused(self):
+        # A hand-edited backup decrypts cleanly and is still not a vault.
+        # Restoring used to assign it onto the live vault and only fail
+        # later in the UI — after the file was written and, at login,
+        # after the salt had been rotated.
+        self.crypto.export_encrypted_backup(
+            ["not", "a", "vault"], "BackupPass123", self.path)
+        with self.assertRaises(ValueError):
+            self.crypto.import_encrypted_backup(self.path, "BackupPass123")
+
+    def test_backup_with_a_malformed_entry_list_is_refused(self):
+        self.crypto.export_encrypted_backup(
+            {"entries": ["just a string"]}, "BackupPass123", self.path)
+        with self.assertRaises(ValueError):
+            self.crypto.import_encrypted_backup(self.path, "BackupPass123")
+
+    def test_backup_missing_containers_is_filled_in(self):
+        self.crypto.export_encrypted_backup(
+            {"entries": [{"title": "a"}]}, "BackupPass123", self.path)
+        out = self.crypto.import_encrypted_backup(self.path, "BackupPass123")
+        self.assertEqual(out["entries"], [{"title": "a"}])
+        self.assertEqual(out["trash"], [])
+        self.assertEqual(out["categories"], self.crypto.DEFAULT_CATEGORIES)
+
+
+@unittest.skipUnless(_HAS_CRYPTO, "cryptography library not available")
+class NormalizeVaultTests(unittest.TestCase):
+    """The shape guard restores run through before touching the vault."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.env = mock.patch.dict(os.environ, {"APPDATA": self.tmp})
+        self.env.start()
+        for mod in ("password_vault.crypto", "password_vault.settings",
+                    "password_vault"):
+            sys.modules.pop(mod, None)
+        from password_vault import crypto
+        self.crypto = crypto
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_complete_vault_passes_through_unchanged(self):
+        self.assertEqual(self.crypto.normalize_vault(VAULT), VAULT)
+
+    def test_unknown_keys_are_preserved(self):
+        # Forward compatibility: a newer version's field must survive a
+        # round-trip through an older one rather than being dropped.
+        data = dict(VAULT, future_field={"x": 1})
+        self.assertEqual(
+            self.crypto.normalize_vault(data)["future_field"], {"x": 1})
+
+    def test_the_input_is_not_mutated(self):
+        data = {"entries": []}
+        self.crypto.normalize_vault(data)
+        self.assertNotIn("trash", data)
+
+    def test_non_dict_is_refused(self):
+        for bad in ([], "vault", 7, None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    self.crypto.normalize_vault(bad)
+
+    def test_non_dict_entries_are_refused(self):
+        for bad in ({"entries": "nope"}, {"entries": [1, 2]},
+                    {"entries": [{"ok": True}, "no"]}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    self.crypto.normalize_vault(bad)
+
+    def test_bad_categories_fall_back_to_the_defaults(self):
+        for bad in ("General", [1, 2], None):
+            with self.subTest(bad=bad):
+                out = self.crypto.normalize_vault(
+                    {"entries": [], "categories": bad})
+                self.assertEqual(out["categories"],
+                                 self.crypto.DEFAULT_CATEGORIES)
+
+    def test_bad_trash_falls_back_to_empty(self):
+        out = self.crypto.normalize_vault({"entries": [], "trash": "gone"})
+        self.assertEqual(out["trash"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
