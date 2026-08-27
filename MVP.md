@@ -274,7 +274,76 @@ later is invisible in English, so the check has to be static.
 
 ## Remaining — large, each needs a decision before starting
 
-Nothing at this size is outstanding. The next candidates, none started:
+### 1. Rendering the entry list — the one that matters
+
+**The app is not smooth with an ordinary number of entries.** Repainting
+the list takes about a quarter of a second *per row*, and it repaints on
+startup, on every settled search keystroke, on a category switch, and after
+every add, edit, delete and pin.
+
+Reproduce with `python tools/benchmark_ui.py`. On the machine this was
+measured on:
+
+| entries | repaint |
+|---------|---------|
+| 5       | 1.5 s   |
+| 10      | 2.8 s   |
+| 20      | 5.1 s   |
+| 40      | 10.0 s  |
+| 60      | 15.3 s  |
+
+A faster machine shifts these down, but the shape does not change: the cost
+is linear in the number of cards, and a card is expensive.
+
+**Where it goes.** Not the display, and not the crypto. A control of 1000
+plain `tk.Label`s on the same session paints in 297 ms — 0.30 ms a widget,
+which is healthy. The cost is CustomTkinter's per-widget overhead:
+
+| widget      | cost    | vs a plain tk.Label |
+|-------------|---------|---------------------|
+| `tk.Frame`  | 0.01 ms | 0.1x                |
+| `tk.Label`  | 0.10 ms | 1x                  |
+| `CTkLabel`  | 0.92 ms | 9x                  |
+| `CTkButton` | 3.41 ms | 35x                 |
+| `CTkFrame`  | 4.45 ms | 46x                 |
+
+A CTk widget draws itself onto its own canvas with rounded corners, which
+is exactly what makes it look right and what makes 43 of them per row cost
+250 ms. Roughly 30% of that is building the widgets and 70% is painting
+them.
+
+**Ruled out.** Detaching the scroll container while filling it — the usual
+fix for incremental relayout — changes nothing here (measured at 1%, which
+is noise). The geometry manager is not the bottleneck; the widgets are.
+
+**Options, measured on 60 cards:**
+
+| approach | 60 cards | what it costs |
+|----------|----------|---------------|
+| today | 11.8 s | — |
+| invisible container frames → `tk.Frame` | 9.9 s (−16%) | nothing visible |
+| ...and text labels → `tk.Label` | 3.3 s (−72%) | icon buttons lose hover and rounded corners |
+| `ENTRIES_PAGE_SIZE` 60 → 20 | first paint 3x faster | "Show more" appears sooner |
+| reuse cards instead of destroy-and-rebuild | not measured | the largest change; a real refactor |
+
+**The shared catch.** Plain Tk widgets do not follow the appearance mode on
+their own — that is the whole reason `theme.resolve()` exists for menus and
+tooltips. Any of the first two options means the list must be repainted
+explicitly when the theme changes. That is one call in the Settings theme
+handler, but it is a behaviour change and it is why this needs a decision
+rather than just being done.
+
+**Recommended:** the second row plus the smaller page size. It reaches
+something that is actually pleasant to use, and the tradeoff is confined to
+the small icon buttons on each card — the ones that are already 24px
+squares — while the cards, dialogs and everything else stay CustomTkinter.
+
+**Acceptance:** `tools/benchmark_ui.py` shows a 20-entry vault repainting
+under 300 ms, the dialog smoke tests still pass in both themes and both
+languages, and switching theme with the list open leaves no card in the
+old palette.
+
+### Other candidates, none started:
 
 - **1Password's 1PUX export** — a zip carrying attachments and item types
   beyond logins. Bitwarden's JSON is now read directly; 1PUX needs archive

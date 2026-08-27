@@ -279,6 +279,8 @@ PasswordVault/
 │           ├── generator.py         # Password generator
 │           ├── security_dashboard.py# Score, weak/reused/old lists, breach check
 │           └── trash.py             # Recycle Bin
+├── tools/
+│   └── benchmark_ui.py             # Entry-list render benchmark
 ├── tests/                           # Unit tests (pytest / unittest)
 ├── icon.ico                         # Application icon
 ├── PasswordVault.spec               # PyInstaller build spec
@@ -358,11 +360,19 @@ Tk-dependent tests skip themselves automatically when no display is available.
 - **It never runs on the UI thread.** Unlocking, creating an encrypted
   backup, restoring one, and changing the master password all derive in a
   worker and show a busy state, so the window keeps repainting.
-- Everything else is comfortably fast: on a 5,000-entry vault, encrypting
-  the whole file takes ~36 ms, the security score ~44 ms, and a search
-  filter ~7 ms. The entry list renders in pages of 60 with a **Show more**
-  footer, because Tk has no virtualised list and an unbounded vault would
-  build thousands of widgets on every keystroke.
+- **The data side is fast.** On a 5,000-entry vault, encrypting the whole
+  file takes ~36 ms, the security score ~44 ms, and a search filter ~7 ms.
+- **Rendering the list is not.** A card is 43 CustomTkinter widgets and a
+  CTk widget costs 9–46x a plain Tk one, so a repaint runs about a quarter
+  of a second per row — and the list repaints on search, category switch,
+  and every add, edit, delete or pin. Measure it on your own machine with:
+
+  ```bash
+  python tools/benchmark_ui.py
+  ```
+
+  This is the next thing to fix; the options and the recommendation are
+  written up in [MVP.md](MVP.md) under *Rendering the entry list*.
 
 ---
 
