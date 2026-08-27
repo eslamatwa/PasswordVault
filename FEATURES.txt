@@ -33,7 +33,10 @@ SECURITY
   * Breach Check — Have I Been Pwned lookup by hash prefix only; no password
     or full hash ever leaves the machine
   * Encrypted Backup & Restore — separately-encrypted backup file, restorable
-    even from the login screen
+    even from the login screen without the old master password
+  * No Recovery Without It — the master password is never stored, so nothing
+    can reset it. The app says so once, when the vault is created, and
+    offers to make a backup there and then
   * Consistent Restore — a failed restore puts the previous salt back, so the
     vault always stays openable
   * Safe Export — CSV/Excel cells are escaped against formula injection
@@ -84,7 +87,8 @@ PASSWORD MANAGEMENT
   * Notes — add optional notes to any entry
   * Edit & Delete — full CRUD with confirmation dialogs
   * Duplicate Password Detection — real-time warning if a password is reused
-  * Recycle Bin — deleted entries kept for recovery (configurable days)
+  * Recycle Bin — deleted entries kept for recovery for 30 days, then
+    purged from the encrypted file itself, not just from the view
 
 
 RIGHT-CLICK CONTEXT MENU
@@ -117,8 +121,10 @@ SSH & RDP INTEGRATION
         rather than being quietly rewritten
   * RDP Session Dialog:
       - Host/IP input (auto-filled from entry URL)
-      - Username and port configuration
-      - Password auto-copied to clipboard on connect, cleared after 10s
+      - Port configuration. There is no username field: mstsc takes no
+        username on its command line, so Windows asks for it itself
+      - Password auto-copied to clipboard on connect and held for at least
+        60 seconds, ready to paste into the Windows credential prompt
 
 
 FLOATING WIDGET & MINI VAULT

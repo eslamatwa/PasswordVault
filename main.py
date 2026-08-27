@@ -492,7 +492,7 @@ class PasswordVault:
             font=ctk.CTkFont(family="Segoe UI", size=14), justify="center",
             fg_color=BG_SEC, border_color=BG_TERT, border_width=1,
             corner_radius=12, text_color=TEXT_PRI)
-        self.master_entry.pack(side="left")
+        self.master_entry.pack(side=side_start())
         self.master_entry.bind("<Return>", lambda e: self.unlock())
 
         tip(self.master_entry,
@@ -511,7 +511,7 @@ class PasswordVault:
             font=ctk.CTkFont(size=14), fg_color=BG_SEC,
             hover_color=BG_TERT, corner_radius=12,
             text_color=TEXT_SEC, command=toggle_master)
-        eye_master.pack(side="left", padx=(4, 0))
+        eye_master.pack(side=side_start(), padx=pad(4, 0))
         tip(eye_master, t("Show / hide password"))
 
         self.error_label = ctk.CTkLabel(
@@ -527,12 +527,12 @@ class PasswordVault:
             self.strength_bar = ctk.CTkProgressBar(
                 sf, width=320, height=5, corner_radius=3,
                 fg_color=BG_TERT, progress_color=TEXT_QUAT)
-            self.strength_bar.pack(side="left")
+            self.strength_bar.pack(side=side_start())
             self.strength_bar.set(0)
             self.strength_label = ctk.CTkLabel(
                 sf, text="", font=ctk.CTkFont(size=10),
                 text_color=TEXT_QUAT)
-            self.strength_label.pack(side="left", padx=(8, 0))
+            self.strength_label.pack(side=side_start(), padx=pad(8, 0))
             self.master_entry.bind("<KeyRelease>",
                                     self._update_login_strength)
             tip(self.strength_bar,
@@ -805,6 +805,55 @@ class PasswordVault:
 
         self._start_idle_timer()
         self._bind_shortcuts()
+        if is_new:
+            # After the window is up, not instead of it.
+            self.root.after(400, self._offer_first_backup)
+
+    def _offer_first_backup(self) -> None:
+        """Say once that a forgotten master password cannot be recovered.
+
+        The encrypted backup is the only way back into a vault whose
+        password has been forgotten — there is no escrow, no reset link and
+        no support address that can help, which is the point of the design.
+        But it lived in a menu the user had no reason to open, so a vault
+        could be filled with passwords for months with no way back in and
+        nothing having said so.
+
+        Asked once, at creation, and never again: `backup_prompted` records
+        it whichever button is used, so this is a warning rather than
+        nagging.
+        """
+        if self.settings.get("backup_prompted"):
+            return
+        self.settings["backup_prompted"] = True
+        save_settings(self.settings)
+
+        dlg = self._make_dialog("Save a recovery backup", 420, 300)
+        dialog_header(
+            dlg, "No one can recover this vault", icon="🛟", size=16,
+            big_icon=True,
+            subtitle="If you forget your master password, the passwords in "
+                     "this vault cannot be read again — not by you, and not "
+                     "by anyone else. There is no reset.\n\n"
+                     "An encrypted backup, kept somewhere safe with its own "
+                     "password, is the only way back in.",
+            pady=(16, 14))
+
+        def create(_event=None):
+            dlg.destroy()
+            self.show_backup_export_dialog()
+
+        made = button_row(dlg, [
+            {"name": "later", "text": "Later", "command": dlg.destroy,
+             "side": "start", "fg_color": BG_TERT,
+             "hover_color": CARD_HOVER},
+            {"name": "create", "text": "🛟  Create backup",
+             "command": create, "side": "end", "fg_color": GREEN,
+             "hover_color": GREEN_HOVER, "text_color": TEXT_ON_GREEN,
+             "weight": "bold"},
+        ], pady=(0, 16))
+        dlg.bind("<Return>", lambda _e: create())
+        made["create"].focus()
 
     # ─── Main UI ─────────────────────────────────────────────
     def build_ui(self):
@@ -1157,7 +1206,7 @@ class PasswordVault:
             width=140, fg_color=BG_TERT, progress_color=ACCENT,
             button_color=ACCENT, button_hover_color=ACCENT_HOVER)
         gl_slider.set(gl_var.get())
-        gl_slider.pack(side="right", padx=(0, 8))
+        gl_slider.pack(side=side_end(), padx=pad(0, 8))
         tip(lbl5, t("Default password length when opening the generator."))
 
         r6, lbl6 = setting_row(g_gen, "🔤", "Uppercase (ABC)", idx=1)
@@ -1250,7 +1299,7 @@ class PasswordVault:
                 font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=TEXT_ON_ACCENT,
                 command=lambda k=ckey: _sel_def_color(k))
-            b.pack(side="left", padx=3)
+            b.pack(side=side_start(), padx=3)
             color_btns[ckey] = b
             tip(b, t("{label} — set as default card color",
                      label=t(info["label"])))
@@ -1920,7 +1969,7 @@ class PasswordVault:
             port_row, width=80, height=34, font=ctk.CTkFont(size=12),
             fg_color=INPUT_BG, border_width=0, corner_radius=8,
             text_color=TEXT_PRI, justify=ltr_justify())
-        port_e.pack(side="left", padx=(10, 0))
+        port_e.pack(side=side_start(), padx=pad(10, 0))
         port_e.insert(0, str(self._extract_port(
             entry.get("url", ""), default_port)))
 
@@ -2008,13 +2057,14 @@ class PasswordVault:
             btn_row, text=t("Cancel"), width=90, height=36,
             font=ctk.CTkFont(size=12), fg_color=BG_TERT,
             hover_color=SEPARATOR, text_color=TEXT_SEC, corner_radius=8,
-            command=dlg.destroy).pack(side="left")
+            command=dlg.destroy).pack(side=side_start())
         connect_btn = ctk.CTkButton(
             btn_row, text=t("🖥️  Connect"), height=36,
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=btn_color, hover_color=btn_hover,
             text_color=btn_text_color, corner_radius=8, command=connect)
-        connect_btn.pack(side="right", fill="x", expand=True, padx=(8, 0))
+        connect_btn.pack(side=side_end(), fill="x", expand=True,
+                         padx=pad(8, 0))
         tip(connect_btn,
             t("Start {kind} session (password copied to clipboard)",
               kind=kind.upper()))
@@ -2303,7 +2353,7 @@ class PasswordVault:
                 font=ctk.CTkFont(size=11, weight="bold"),
                 text_color=TEXT_ON_ACCENT,
                 command=lambda k=ckey: _select_color(k))
-            b.pack(side="left", padx=2)
+            b.pack(side=side_start(), padx=2)
             color_btns[ckey] = b
             tip(b, t("{label} card color", label=t(info["label"])))
 

@@ -127,22 +127,10 @@ def test_placeholders_survive_translation(app, arabic):
     assert "3" in out
 
 
-def test_every_catalog_entry_has_matching_placeholders():
-    """A translation may reorder placeholders but not invent or drop them.
-
-    A mismatch here would raise at runtime inside whichever dialog uses the
-    string, which is exactly the class of bug a translated build hides
-    until someone switches language.
-    """
-    import re
-    from password_vault.i18n import ARABIC
-
-    field = re.compile(r"\{(\w+)\}")
-    bad = []
-    for source, translated in ARABIC.items():
-        if set(field.findall(source)) != set(field.findall(translated)):
-            bad.append(source)
-    assert not bad, f"placeholder mismatch in: {bad}"
+# The placeholder check that used to live here now runs per catalog in
+# tests/test_i18n_coverage.py, alongside the rest of the catalog rules —
+# it does not need a live window, and keeping one copy means a third
+# language is covered by the same test.
 
 
 @pytest.mark.parametrize("theme", THEMES)

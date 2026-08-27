@@ -131,22 +131,62 @@ class CryptoTests(unittest.TestCase):
 
         self.assertEqual([t["id"] for t in loaded["trash"]], ["recent"])
 
-    def test_trash_purge_is_not_written_back_on_load(self):
-        # The filter runs on every load, so persisting it would re-encrypt
-        # the whole vault at every startup.
+    def _seed_trash(self, items):
+        key = self.crypto.derive_key("pw", self.crypto.get_or_create_salt())
+        self.crypto.save_data(
+            {"categories": ["General"], "entries": [], "trash": items}, key)
+        return key
+
+    def test_an_expired_item_is_purged_from_the_file_not_just_memory(self):
+        """A retention period the file does not honour is not a retention
+        period. The entry used to be filtered in memory and left in the
+        ciphertext until the user happened to save."""
         import datetime
         from password_vault.settings import TRASH_DAYS
-        key = self.crypto.derive_key("pw", self.crypto.get_or_create_salt())
         old = (datetime.datetime.now()
                - datetime.timedelta(days=TRASH_DAYS + 1)).isoformat()
-        self.crypto.save_data(
-            {"categories": ["General"], "entries": [],
-             "trash": [{"id": "old", "deleted_at": old}]}, key)
+        key = self._seed_trash([{"id": "old", "deleted_at": old}])
+
+        self.crypto.load_data(key)
+
+        # Read again: the purge has to be on disk, not only in the copy
+        # the first load returned.
+        self.assertEqual(self.crypto.load_data(key)["trash"], [])
+
+    def test_a_load_that_purges_nothing_does_not_rewrite_the_file(self):
+        """The original reason for filtering in memory still holds: an
+        ordinary startup must not re-encrypt the whole vault."""
+        import datetime
+        recent = (datetime.datetime.now()
+                  - datetime.timedelta(days=1)).isoformat()
+        key = self._seed_trash([{"id": "recent", "deleted_at": recent}])
         before = os.path.getmtime(self.crypto.DATA_FILE)
 
         self.crypto.load_data(key)
 
         self.assertEqual(os.path.getmtime(self.crypto.DATA_FILE), before)
+
+    def test_an_empty_bin_does_not_rewrite_the_file(self):
+        key = self._seed_trash([])
+        before = os.path.getmtime(self.crypto.DATA_FILE)
+        self.crypto.load_data(key)
+        self.assertEqual(os.path.getmtime(self.crypto.DATA_FILE), before)
+
+    def test_a_failed_purge_still_opens_the_vault(self):
+        """Housekeeping must not stop a read-only disk from unlocking."""
+        import datetime
+        from password_vault.settings import TRASH_DAYS
+        old = (datetime.datetime.now()
+               - datetime.timedelta(days=TRASH_DAYS + 1)).isoformat()
+        key = self._seed_trash([{"id": "old", "deleted_at": old},
+                                {"id": "keep", "deleted_at":
+                                 datetime.datetime.now().isoformat()}])
+
+        with mock.patch.object(self.crypto, "save_data",
+                               side_effect=OSError("read-only")):
+            loaded = self.crypto.load_data(key)
+
+        self.assertEqual([t["id"] for t in loaded["trash"]], ["keep"])
 
 
 class PasswordStrengthTests(unittest.TestCase):

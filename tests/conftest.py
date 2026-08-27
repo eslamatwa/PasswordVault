@@ -59,6 +59,16 @@ SAMPLE_VAULT = {
 FAKE_KEY = b"0" * 44
 
 
+# The crypto module the running app is bound to, captured while it is
+# built. Several test modules reload password_vault.crypto against their
+# own temp APPDATA and leave the reloaded copy in sys.modules, so a test
+# that imports it later can get a module whose DATA_FILE points at a
+# directory that no longer exists — and not the one the app reads and
+# writes. Anything that has to touch the app's real files must go through
+# the `app_crypto` fixture rather than a fresh import.
+_APP_CRYPTO = None
+
+
 @pytest.fixture(scope="session")
 def _live_app():
     if not HAS_DISPLAY:
@@ -71,6 +81,9 @@ def _live_app():
         sys.modules.pop(mod, None)
 
     import main as main_module
+
+    global _APP_CRYPTO
+    _APP_CRYPTO = sys.modules["password_vault.crypto"]
 
     vault = main_module.PasswordVault()
     # The real save path needs a working key and a writable vault file;
@@ -100,6 +113,20 @@ def app(_live_app):
     _reset(_live_app)
     yield _live_app
     _close_dialogs(_live_app)
+
+
+@pytest.fixture
+def app_crypto(_live_app):
+    """The crypto module the running app actually uses.
+
+    Not `import password_vault.crypto` — by the time a test runs, that name
+    may point at a copy another test module reloaded against its own temp
+    directory. Using the wrong one is silent: writes land somewhere the app
+    never looks, and the test fails for a reason that has nothing to do
+    with what it is checking.
+    """
+    assert _APP_CRYPTO is not None, "the app was never built"
+    return _APP_CRYPTO
 
 
 @pytest.fixture

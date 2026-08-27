@@ -261,17 +261,36 @@ def load_data(key: bytes) -> dict:
             except OSError as exc:
                 log.warning("Pre-migration backup failed: %s", exc)
 
-    # Auto-clean trash older than TRASH_DAYS. This is applied to the
-    # in-memory copy only: the filter runs on every load anyway, so writing
-    # it back would re-encrypt the whole vault at every startup for no
-    # observable gain. The next user-initiated save persists it.
+    # Auto-clean trash older than TRASH_DAYS.
+    #
+    # This used to be applied to the in-memory copy only, on the reasoning
+    # that the filter runs on every load anyway. But the entries stayed in
+    # the file until the user happened to save, so a secret the app had
+    # promised to purge after TRASH_DAYS could sit in the ciphertext
+    # indefinitely on a vault nobody edits — which is the opposite of what
+    # a retention period is for.
+    #
+    # Writing back only when something actually expired keeps the original
+    # point of that reasoning: a startup that drops nothing still costs no
+    # re-encryption, and an item can only cross the boundary once.
     cutoff = (datetime.datetime.now()
               - datetime.timedelta(days=TRASH_DAYS)).isoformat()
-    data["trash"] = [t for t in data["trash"]
-                     if t.get("deleted_at", "") > cutoff]
+    kept = [t for t in data["trash"] if t.get("deleted_at", "") > cutoff]
+    expired = len(data["trash"]) - len(kept)
+    data["trash"] = kept
 
     if schema_changed:
         save_data(data, key)
+    elif expired:
+        log.info("Purging %d trash item(s) past the %d-day retention.",
+                 expired, TRASH_DAYS)
+        try:
+            save_data(data, key)
+        except (OSError, ValueError, TypeError) as exc:
+            # Housekeeping, not the user's request: a read-only disk must
+            # not stop the vault from opening. The filter runs again next
+            # time, so nothing is lost by deferring it.
+            log.warning("Could not persist the trash purge: %s", exc)
     return data
 
 

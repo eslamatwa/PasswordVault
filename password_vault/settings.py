@@ -45,6 +45,12 @@ DEFAULT_SETTINGS: dict = {
     "clipboard_clear_seconds": 30,
     "theme": "Dark",
     "language": "English",
+    # Whether the "there is no recovery" prompt has been shown, and
+    # when a backup was last written. A vault with no backup and a
+    # forgotten master password cannot be opened by anyone, so the
+    # app has to say so once rather than leave it in a menu.
+    "backup_prompted": False,
+    "last_backup_at": "",
     # Brute-force state, persisted so closing and reopening the app does
     # not hand an attacker a fresh set of attempts. It lives here rather
     # than in the vault because it has to be readable while locked.
@@ -73,6 +79,8 @@ _SPEC: dict[str, tuple] = {
     "clipboard_clear_seconds": (int, lambda v: 0 <= v <= 3600),
     "theme": (str, lambda v: v in THEME_MODES),
     "language": (str, lambda v: v in LANGUAGE_CODES),
+    "backup_prompted": (bool, None),
+    "last_backup_at": (str, lambda v: len(v) <= 40),
     "failed_streak": (int, lambda v: 0 <= v <= 100000),
     "lockout_until": (int, lambda v: v >= 0),
 }

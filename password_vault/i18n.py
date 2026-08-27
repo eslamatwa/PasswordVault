@@ -466,6 +466,20 @@ ARABIC: dict[str, str] = {
     "No rows matched this format — try another one":
         "لا صفوف تطابق هذه الصيغة — جرّب صيغة أخرى",
 
+    # ── Recovery warning ──
+    "Save a recovery backup": "احفظ نسخة للاسترجاع",
+    "No one can recover this vault": "لا أحد يستطيع استرجاع هذه الخزنة",
+    "If you forget your master password, the passwords in this vault "
+    "cannot be read again — not by you, and not by anyone else. There is "
+    "no reset.\n\nAn encrypted backup, kept somewhere safe with its own "
+    "password, is the only way back in.":
+        "إذا نسيت كلمة المرور الرئيسية، فلن يمكن قراءة كلمات المرور في هذه "
+        "الخزنة مرة أخرى — لا أنت ولا أي شخص آخر. لا توجد إعادة تعيين."
+        "\n\nالنسخة الاحتياطية المشفّرة، محفوظة في مكان آمن بكلمة مرور "
+        "خاصة بها، هي الطريق الوحيد للعودة.",
+    "Later": "لاحقاً",
+    "🛟  Create backup": "🛟  إنشاء نسخة احتياطية",
+
     # ── Encrypted backup ──
     "Encrypted Backup": "نسخة احتياطية مشفّرة",
     "Restore From Backup": "استعادة من نسخة احتياطية",

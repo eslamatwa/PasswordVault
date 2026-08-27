@@ -6,7 +6,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from ...i18n import t
+from ...i18n import pad, side_end, side_start, t
 from ...security import generate_password, password_strength
 from ...settings import save_settings
 from ...theme import (
@@ -50,10 +50,10 @@ def show(app, target_entry) -> None:
     sf.pack(fill="x", pady=(0, 8))
     sb = ctk.CTkProgressBar(sf, height=4, corner_radius=2,
                               fg_color=BG_TERT, progress_color=GREEN)
-    sb.pack(side="left", fill="x", expand=True)
+    sb.pack(side=side_start(), fill="x", expand=True)
     sl = ctk.CTkLabel(sf, text="", font=ctk.CTkFont(size=9),
                         text_color=GREEN)
-    sl.pack(side="left", padx=(6, 0))
+    sl.pack(side=side_start(), padx=pad(6, 0))
 
     lv = ctk.IntVar(value=_gl)
     uv = ctk.BooleanVar(value=app.settings.get("gen_upper", True))
@@ -65,11 +65,11 @@ def show(app, target_entry) -> None:
     lf.pack(fill="x", pady=(0, 5))
     ctk.CTkLabel(lf, text=t("Length:"),
                   font=ctk.CTkFont(size=11),
-                  text_color=TEXT_SEC).pack(side="left")
+                  text_color=TEXT_SEC).pack(side=side_start())
     ll = ctk.CTkLabel(lf, text=str(_gl),
                         font=ctk.CTkFont(size=11, weight="bold"),
                         text_color=TEXT_PRI, width=28)
-    ll.pack(side="right")
+    ll.pack(side=side_end())
 
     def regen(*_):
         pw = generate_password(lv.get(), uv.get(), lov.get(),
@@ -99,7 +99,7 @@ def show(app, target_entry) -> None:
         fg_color=BG_TERT, progress_color=ACCENT,
         button_color=ACCENT, button_hover_color=ACCENT_HOVER)
     slider.set(_gl)
-    slider.pack(side="left", fill="x", expand=True, padx=(8, 8))
+    slider.pack(side=side_start(), fill="x", expand=True, padx=8)
     tip(slider, t("Drag to change password length"))
 
     cf = ctk.CTkFrame(frm, fg_color="transparent")
@@ -115,7 +115,7 @@ def show(app, target_entry) -> None:
             font=ctk.CTkFont(size=11),
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             command=regen)
-        chk.pack(side="left", padx=(0, 10))
+        chk.pack(side=side_start(), padx=pad(0, 10))
         tip(chk, desc)
 
     bf = ctk.CTkFrame(frm, fg_color="transparent")
@@ -124,7 +124,8 @@ def show(app, target_entry) -> None:
         bf, text=t("🔄  Regenerate"), height=32,
         font=ctk.CTkFont(size=12), fg_color=BG_TERT,
         hover_color=TEXT_QUAT, corner_radius=8, command=regen)
-    regen_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+    regen_btn.pack(side=side_start(), fill="x", expand=True,
+                   padx=pad(0, 4))
     tip(regen_btn, t("Generate a new random password"))
 
     def remember_options():
@@ -148,6 +149,7 @@ def show(app, target_entry) -> None:
         font=ctk.CTkFont(size=12, weight="bold"),
         fg_color=GREEN, hover_color=GREEN_HOVER, text_color=TEXT_ON_GREEN,
         corner_radius=8, command=use)
-    use_btn.pack(side="right", fill="x", expand=True, padx=(4, 0))
+    use_btn.pack(side=side_end(), fill="x", expand=True,
+                 padx=pad(4, 0))
     tip(use_btn, t("Apply this password to the entry"))
     regen()

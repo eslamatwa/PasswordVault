@@ -45,7 +45,7 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 - **One-Click Copy** — Copy usernames and passwords to clipboard instantly.
 - **Notes** — Add optional notes to any entry.
 - **Edit & Delete** — Full CRUD operations with confirmation dialogs.
-- **Recycle Bin** — Deleted entries are recoverable for a retention period before being purged.
+- **Recycle Bin** — Deleted entries are recoverable for 30 days. Once that passes they are removed from the encrypted file itself on the next unlock, not merely hidden from the list.
 - **Duplicate Warning** — The edit dialog flags a password already used by another entry.
 - **CSV & Excel Import/Export** — Round-trips titles, categories, URLs, notes, timestamps, and pinned state.
 
@@ -86,8 +86,8 @@ Shortcuts and `Ctrl+C/V/X/A` are matched by physical key, so they keep working u
   rather than being silently rewritten.
 - **RDP Session Dialog** — Launch Remote Desktop with:
   - Host/IP input (auto-filled from entry URL)
-  - Username and port configuration
-  - Password auto-copied to clipboard on connect
+  - Port configuration — there is no username field, because `mstsc` takes no username on its command line and Windows prompts for it itself
+  - Password auto-copied to clipboard on connect, ready to paste into that prompt
 
 ### 🪟 Floating Widget & Mini Vault
 - **Floating Widget** — Minimizes to a small draggable bubble (always on top) for quick access.
@@ -363,6 +363,32 @@ Tk-dependent tests skip themselves automatically when no display is available.
   filter ~7 ms. The entry list renders in pages of 60 with a **Show more**
   footer, because Tk has no virtualised list and an unbounded vault would
   build thousands of widgets on every keystroke.
+
+---
+
+## 🔑 If You Forget the Master Password
+
+**There is no reset, and no one can recover the vault for you.** The master
+password is never stored anywhere — it only exists as the input to the key
+derivation — so there is no copy to recover, no escrow, and no support
+address that can help. That is what makes the vault safe from everyone else
+too.
+
+The **encrypted backup** is the only way back in. It is a separate file with
+its own password, so forgetting one does not lose the other:
+
+1. Create one from **⚙️ → 🛟 Encrypted Backup** while you still have access.
+2. Keep the `.pvbak` file *and* its password somewhere safe and separate.
+3. To restore, click **🛟 Restore from backup** on the login screen — it
+   works without the old master password, and you set a new one during the
+   restore.
+
+The app asks you to make one the first time you create a vault, and asks
+only that once. If you dismissed it, the menu item is always there.
+
+If you have no backup and have forgotten the password, the entries cannot be
+recovered — the only path forward is to delete `%APPDATA%\PasswordVault\`
+and start again.
 
 ---
 

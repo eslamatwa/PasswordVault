@@ -9,6 +9,7 @@ file and remember its password.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import threading
 import tkinter as tk
@@ -17,12 +18,13 @@ import os
 import customtkinter as ctk
 from tkinter import filedialog as tkfiledialog
 
-from ...i18n import anchor_start, t
+from ...i18n import anchor_start, pad, side_start, t
 from ...crypto import (
     SALT_FILE, derive_key, export_encrypted_backup,
     import_encrypted_backup, read_salt, rotate_salt, save_data,
 )
 from ...security import password_strength
+from ...settings import save_settings
 from ...theme import (
     ACCENT, BG_TERT, CARD_HOVER,
     GREEN, GREEN_HOVER, INFO_BG, ORANGE, ORANGE_HOVER, RED,
@@ -100,11 +102,11 @@ def show_export(app) -> None:
     sb = ctk.CTkProgressBar(sf, height=4, corner_radius=2,
                               fg_color=BG_TERT,
                               progress_color=TEXT_QUAT)
-    sb.pack(side="left", fill="x", expand=True)
+    sb.pack(side=side_start(), fill="x", expand=True)
     sb.set(0)
     sl = ctk.CTkLabel(sf, text="", font=ctk.CTkFont(size=9),
                         text_color=TEXT_QUAT)
-    sl.pack(side="left", padx=(6, 0))
+    sl.pack(side=side_start(), padx=pad(6, 0))
 
     def upd(_e=None):
         s, l, c = password_strength(new_e.get())
@@ -150,6 +152,12 @@ def show_export(app) -> None:
             err.configure(text=f"⚠️ {exc}")
             return
         log.info("Encrypted backup exported by user.")
+        # Remember that one exists. It is the only route back into a vault
+        # whose master password has been forgotten, so "when did I last
+        # make one" is worth being able to answer.
+        app.settings["last_backup_at"] = datetime.datetime.now().isoformat()
+        app.settings["backup_prompted"] = True
+        save_settings(app.settings)
         # Confirmation message inside the dialog so we can keep
         # everything self-contained.
         for w in dlg.winfo_children():

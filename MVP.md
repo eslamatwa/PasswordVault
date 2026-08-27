@@ -69,6 +69,14 @@ python -m pyflakes main.py password_vault tests
   existed silently discarded the rest.
 
 ### Correctness
+- **Trash retention reaches the disk.** The purge was applied to the
+  in-memory copy only, so an entry the app had promised to delete after
+  `TRASH_DAYS` could sit in the ciphertext indefinitely on a vault nobody
+  edits — the opposite of what a retention period is for. It is written
+  back only when something actually expired, which keeps the original
+  point of filtering in memory: an ordinary startup still costs no
+  re-encryption, and an item can only cross the boundary once. A failed
+  write is housekeeping, so it logs and lets the vault open anyway.
 - **Remote credentials are no longer rewritten on their way to a client.**
   `_sanitize_shell_arg` was an allowlist that *deleted* anything outside a
   small set from the username and host: `svc+deploy` connected as
@@ -105,6 +113,14 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **A forgotten master password is now stated, once, at creation.** The
+  encrypted backup was the only way back into a vault whose password had
+  been forgotten — no escrow, no reset, which is the point — but it lived
+  in a menu the user had no reason to open. A vault could be filled with
+  passwords for months with nothing having said there was no way back in.
+  The prompt fires once when a vault is created, offers to make the backup
+  there and then, and records that it asked so it never nags.
+  `last_backup_at` is recorded when one is written.
 - **Nothing blocks the window any more.** Deriving a key is ~300ms of
   deliberate PBKDF2 work, and it ran on the Tk thread at every unlock,
   every encrypted backup and every restore — freezing the window before it
@@ -187,6 +203,11 @@ formula escaping, URL scheme validation, strength/age/duplicate/score logic,
 generator length handling, settings validation, the single-instance lock, the
 theme tokens, the vault shape guard and its fallbacks, the persisted lockout
 state, the Recycle Bin removal helper, and the pure UI helpers.
+`tests/test_unlock_flow.py` runs the whole unlock path with nothing
+stubbed — real PBKDF2, real Fernet, real files — including recovery from an
+interrupted master-password change, because that is a property of the login
+screen rather than of the crypto helpers.
+
 cryptography-dependent tests skip themselves when the library is unavailable;
 `test_theme` and `test_widgets` import `customtkinter` directly, so it is a
 hard test dependency rather than an optional one.
@@ -268,9 +289,6 @@ Nothing at this size is outstanding. The next candidates, none started:
 
 ## Remaining — smaller, known and deliberate
 
-- **Trash retention is applied in memory on load** and only reaches disk on
-  the next user-initiated save, to avoid re-encrypting the whole vault at
-  every startup.
 - **Tk has no bidi algorithm.** Segoe UI handles the joining, but a string
   mixing Arabic with Latin is rendered in logical order rather than
   reordered visually. The fields where that actually showed — URL, host and

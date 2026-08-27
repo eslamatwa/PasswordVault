@@ -10,7 +10,7 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from ...i18n import t
+from ...i18n import pad, side_start, t
 from ...crypto import (
     begin_rotation, derive_key, end_rotation, get_or_create_salt,
     rotate_salt, save_data,
@@ -47,11 +47,11 @@ def show(app) -> None:
     sb = ctk.CTkProgressBar(sf, height=4, corner_radius=2,
                               fg_color=BG_TERT,
                               progress_color=TEXT_QUAT)
-    sb.pack(side="left", fill="x", expand=True)
+    sb.pack(side=side_start(), fill="x", expand=True)
     sb.set(0)
     sl = ctk.CTkLabel(sf, text="", font=ctk.CTkFont(size=9),
                         text_color=TEXT_QUAT)
-    sl.pack(side="left", padx=(6, 0))
+    sl.pack(side=side_start(), padx=pad(6, 0))
 
     def upd():
         s, l, c = password_strength(new_e.get())
