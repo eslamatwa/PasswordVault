@@ -311,8 +311,28 @@ Two of them are worth calling out:
   reach the translator, any string with no Arabic entry, and any catalog key
   nothing uses. An untranslated string is invisible in English, so the check
   has to be static.
+- **`test_hibp.py`** stubs only the network call, so the k-anonymity
+  guarantee is asserted rather than assumed: the request carries the
+  five-character prefix and never the suffix or the password. A failed
+  request must report "unknown", never "safe".
 
 Tk-dependent tests skip themselves automatically when no display is available.
+
+---
+
+## ⚡ Performance Notes
+
+- **Key derivation is deliberately slow** — 480,000 PBKDF2 iterations is
+  about 300 ms on a typical desktop, and that cost is the point: it is what
+  an attacker pays for every guess against a stolen `vault.dat`.
+- **It never runs on the UI thread.** Unlocking, creating an encrypted
+  backup, restoring one, and changing the master password all derive in a
+  worker and show a busy state, so the window keeps repainting.
+- Everything else is comfortably fast: on a 5,000-entry vault, encrypting
+  the whole file takes ~36 ms, the security score ~44 ms, and a search
+  filter ~7 ms. The entry list renders in pages of 60 with a **Show more**
+  footer, because Tk has no virtualised list and an unbounded vault would
+  build thousands of widgets on every keystroke.
 
 ---
 

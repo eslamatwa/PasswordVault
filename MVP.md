@@ -85,6 +85,26 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **Nothing blocks the window any more.** Deriving a key is ~300ms of
+  deliberate PBKDF2 work, and it ran on the Tk thread at every unlock,
+  every encrypted backup and every restore — freezing the window before it
+  could even repaint the click. All three now derive in a worker and show a
+  busy state; `_run_busy` in the backup dialog carries the pattern. The
+  restore also validates the new master password *before* decrypting rather
+  than after, so a mistyped field costs nothing.
+- **Card colour strips are `(light, dark)` pairs.** They were single values
+  tuned against a dark card, so in light mode the accent sat on a pale tint
+  at nearly the same luminance and read as a smear rather than an edge. The
+  light member of each pair is the darker, more saturated iOS colour; a test
+  asserts that relationship rather than trusting the eye.
+- **The floating widget follows the theme.** A raw `tk.Canvas` takes one
+  colour string, not a pair, and CustomTkinter has no hook to tell it about
+  a mode switch — so the bubble polls once a second. It is the one surface
+  that outlives a theme change, since it stays up while the main window is
+  hidden.
+- **A failed deferred save now says so.** Pinning an entry on a full disk
+  looked like it worked, and the only symptom was the pin being gone at the
+  next unlock. Reported once per run of failures, and never while quitting.
 - **Light and dark themes** — every colour is a `(light, dark)` pair, with a
   resolver for raw tkinter widgets (menus, canvases, tooltips) and a theme
   switch in Settings.
@@ -218,19 +238,9 @@ Nothing at this size is outstanding. The next candidates, none started:
   fails after the vault was re-encrypted, the rollback re-saves with the old
   key. If that rollback *also* fails, the vault cannot be opened; it is
   logged as critical, and nothing recovers it automatically.
-- **A failed deferred save is silent.** The change stays queued for the next
-  flush, but nothing on screen says the last write did not land — unlike an
-  interactive save, which reports it.
 - **Trash retention is applied in memory on load** and only reaches disk on
   the next user-initiated save, to avoid re-encrypting the whole vault at
   every startup.
-- **Card colour strips are single values**, tuned for dark backgrounds, so
-  they read brighter than they should in light mode.
-- **The floating widget resolves its accent colour once**, at construction, so
-  switching theme while it is visible leaves the old accent until it is
-  recreated.
-- **The breach check has no offline test.** Its failure path was exercised by
-  hand only.
 - **The smoke harness checks that a dialog builds, not that it looks right.**
   A mirrored layout with the wrong padding passes. RTL was confirmed by eye
   against a running Arabic build; there is no screenshot comparison.

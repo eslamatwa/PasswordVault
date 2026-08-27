@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import uuid
@@ -116,6 +117,14 @@ class PasswordVault:
         self._save_timer = None
         self._save_pending = False
         self._shortcuts_bound = False
+        # True while the unlock worker is deriving the key, so a second
+        # Enter cannot start a parallel derivation against the same salt.
+        self._unlocking = False
+        # One dialog per run of failed deferred saves, not one per
+        # flush: a read-only disk retries on every lock and minimize.
+        self._save_failure_reported = False
+        self.unlock_btn = None
+        self._unlock_btn_text = ""
         # Open modal dialogs, innermost last: the grab has to be handed back
         # when a nested dialog closes.
         self._grab_stack: list = []
@@ -349,7 +358,7 @@ class PasswordVault:
         self._save_timer = self.root.after(
             SAVE_DEBOUNCE_MS, self._flush_pending_save)
 
-    def _flush_pending_save(self):
+    def _flush_pending_save(self, notify: bool = True):
         if self._save_timer:
             try:
                 self.root.after_cancel(self._save_timer)
@@ -367,8 +376,21 @@ class PasswordVault:
             # Keep the change pending so the next flush (lock, minimize or
             # quit) retries it instead of dropping it.
             log.error("Deferred save failed: %s", exc, exc_info=True)
+            # A silent retry told the user nothing: pinning an entry on a
+            # full disk looked like it worked, and the only symptom was the
+            # pin being gone at the next unlock. Reported once per run of
+            # failures, so a read-only disk does not produce one dialog per
+            # flush attempt, and never while quitting — the window is about
+            # to go away and the dialog would only flash.
+            if notify and not self._save_failure_reported:
+                self._save_failure_reported = True
+                self._alert(
+                    t("Could not save"),
+                    t("The vault file could not be written, so this change "
+                      "is only in memory for now.\n\n{error}", error=exc))
             return
         self._save_pending = False
+        self._save_failure_reported = False
 
     def _destroy_open_dialogs(self):
         """Close every open child window before the vault locks.
@@ -523,15 +545,17 @@ class PasswordVault:
             tip(self.confirm_entry,
                 t("Re-enter your password to confirm"))
 
+        self._unlock_btn_text = (t("Unlock  🔓") if not is_new
+                                 else t("Create Vault  🔐"))
         unlock_btn = ctk.CTkButton(
             self.login_frame,
-            text=(t("Unlock  🔓") if not is_new
-                  else t("Create Vault  🔐")),
+            text=self._unlock_btn_text,
             width=320, height=46,
             font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
             fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=12,
 
             command=self.unlock)
+        self.unlock_btn = unlock_btn
         unlock_btn.pack(pady=(10, 0))
         tip(unlock_btn,
             t("Decrypt and open your vault") if not is_new
@@ -597,6 +621,8 @@ class PasswordVault:
 
     def unlock(self):
 
+        if self._unlocking:
+            return
         now = time.time()
         if now < self._lockout_until:
             remaining = int(self._lockout_until - now)
@@ -625,15 +651,56 @@ class PasswordVault:
                 return
 
 
+        # Deriving the key is ~300ms of deliberate PBKDF2 work and decrypting
+        # follows it, so the whole thing goes to a worker: on the Tk thread
+        # it froze the window at every single unlock, including the redraw
+        # that would have shown the user their keypress landed.
         salt = get_or_create_salt()
-        self.key = derive_key(pw, salt)
+        self._set_unlocking(True)
+
+        def work():
+            try:
+                key = derive_key(pw, salt)
+                data = load_data(key)
+            except BaseException as exc:  # noqa: BLE001 - marshalled below
+                self.root.after(0, lambda exc=exc: self._unlock_done(
+                    is_new, None, None, exc))
+                return
+            self.root.after(0, lambda: self._unlock_done(
+                is_new, key, data, None))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _set_unlocking(self, busy: bool) -> None:
+        """Show that the vault is being opened, and refuse a second submit."""
+        self._unlocking = busy
+        try:
+            self.unlock_btn.configure(
+                state="disabled" if busy else "normal",
+                text=t("⏳  Unlocking…") if busy else self._unlock_btn_text)
+            if busy:
+                self.error_label.configure(text="")
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _unlock_done(self, is_new: bool, key, data, exc) -> None:
+        """Back on the Tk thread with the result of the derivation."""
+        try:
+            if not self.error_label.winfo_exists():
+                return
+        except (AttributeError, tk.TclError):
+            return
+        self._set_unlocking(False)
 
         max_att = self.settings.get("max_login_attempts",
                                      MAX_LOGIN_ATTEMPTS)
         lock_sec = self.settings.get("lockout_seconds", LOCKOUT_SECONDS)
-        try:
-            self.data = load_data(self.key)
 
+        if exc is None:
+            self.key, self.data = key, data
+        try:
+            if exc is not None:
+                raise exc
         except InvalidToken:
             # Drop the wrong key. Leaving it set kept `_reset_idle` armed
             # while the login screen was up, so the auto-lock timer fired
@@ -666,10 +733,20 @@ class PasswordVault:
             # outlive this process to mean anything.
             self._persist_lockout_state()
             return
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError) as read_error:
             # Unreadable or implausibly large vault file — not a bad
             # password, so don't count it as a failed attempt.
-            log.error("Vault could not be read: %s", exc, exc_info=True)
+            log.error("Vault could not be read: %s", read_error,
+                      exc_info=True)
+            self.key = None
+            self.error_label.configure(
+                text=t("⚠️ Vault file could not be read"))
+            return
+        except Exception as unexpected:  # noqa: BLE001
+            # The worker cannot let anything escape into a dead thread, so
+            # a surprise arrives here rather than in Tk's handler.
+            log.error("Unlock failed unexpectedly: %s", unexpected,
+                      exc_info=True)
             self.key = None
             self.error_label.configure(
                 text=t("⚠️ Vault file could not be read"))
@@ -2353,7 +2430,7 @@ class PasswordVault:
     def quit_app(self):
 
         log.info("Application exiting.")
-        self._flush_pending_save()
+        self._flush_pending_save(notify=False)
         try:
             if self._clipboard_timer:
                 self.root.after_cancel(self._clipboard_timer)
@@ -2500,11 +2577,13 @@ class PasswordVault:
         except (OSError, ValueError, TypeError) as exc:
             log.error("Save failed: %s", exc, exc_info=True)
             self._save_pending = True
+            self._save_failure_reported = True
             self._alert(
                 "Could not save",
                 t("The vault file could not be written, so this change "
                   "is only in memory for now.\n\n{error}", error=exc))
             return False
+        self._save_failure_reported = False
         return True
 
     def _open_url(self, url: str) -> None:

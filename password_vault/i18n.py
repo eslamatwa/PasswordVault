@@ -146,6 +146,7 @@ ARABIC: dict[str, str] = {
     "Confirm Password": "تأكيد كلمة المرور",
     "Unlock  🔓": "فتح  🔓",
     "Create Vault  🔐": "إنشاء الخزنة  🔐",
+    "⏳  Unlocking…": "⏳  جارٍ الفتح…",
     "🛟  Restore from backup": "🛟  استعادة من نسخة احتياطية",
     "Enter your master password to unlock the vault":
         "أدخل كلمة المرور الرئيسية لفتح الخزنة",
@@ -393,6 +394,8 @@ ARABIC: dict[str, str] = {
     "Confirm": "التأكيد",
     "Change Password": "تغيير كلمة المرور",
     "⏳  Re-encrypting…": "⏳  إعادة التشفير…",
+    "⏳  Encrypting…": "⏳  جارٍ التشفير…",
+    "⏳  Decrypting…": "⏳  جارٍ فك التشفير…",
     "Save the new master password": "حفظ كلمة المرور الرئيسية الجديدة",
     "Deriving key and re-encrypting the vault…":
         "اشتقاق المفتاح وإعادة تشفير الخزنة…",

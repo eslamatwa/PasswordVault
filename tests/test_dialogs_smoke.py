@@ -283,6 +283,53 @@ def _find_button(widget, text):
     return None
 
 
+def test_unlock_does_not_block_the_ui_thread(app):
+    """Key derivation runs in a worker, not in the click handler.
+
+    ~300ms of PBKDF2 on the Tk thread froze the window at every unlock,
+    including the repaint that would have shown the keypress landed. The
+    handler must return long before the derivation finishes.
+    """
+    import time
+
+    app._auto_lock()          # back to the login screen
+    app.root.update()
+    assert app.key is None
+
+    # No vault file exists under the test's APPDATA, so this is the
+    # create-a-vault path and the confirm field has to match.
+    app.master_entry.insert(0, "AnyPassword123!")
+    if app.confirm_entry is not None:
+        app.confirm_entry.insert(0, "AnyPassword123!")
+    started = time.perf_counter()
+    app.unlock()
+    elapsed = (time.perf_counter() - started) * 1000
+    # The real derivation is ~300ms; anything near that means it ran here.
+    assert elapsed < 100, f"unlock() blocked for {elapsed:.0f}ms"
+    assert app._unlocking, "the busy flag was not set"
+
+    # A second submit while the first is in flight must be refused, or two
+    # derivations race for the same key.
+    app.unlock()
+    assert app._unlocking
+
+    # The worker marshals its result back with root.after(), which Tk only
+    # accepts from another thread while the main thread is inside
+    # mainloop() — the state the real app is always in. Polling with
+    # update() instead would fail here for a reason the app never hits.
+    deadline = time.time() + 20
+
+    def poll():
+        if not app._unlocking or time.time() > deadline:
+            app.root.quit()
+        else:
+            app.root.after(20, poll)
+
+    app.root.after(20, poll)
+    app.root.mainloop()
+    assert not app._unlocking, "the unlock worker never reported back"
+
+
 def test_auto_lock_closes_every_dialog(app):
     """No plaintext may be left on screen behind the login window."""
     _open(app, lambda a: a.show_entry_dialog(a.data["entries"][0]))

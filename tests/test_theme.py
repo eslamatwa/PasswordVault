@@ -56,5 +56,60 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(theme.cat_emoji("Nope"), theme.DEFAULT_EMOJI)
 
 
+class CardStripTests(unittest.TestCase):
+    """Card strips are (light, dark) pairs like every other colour.
+
+    They used to be one value tuned against a dark card, so in light mode
+    the accent sat on a pale tint at nearly the same luminance and read as
+    a smear rather than an edge.
+    """
+
+    def test_every_strip_is_a_light_dark_pair(self):
+        for key, info in theme.CARD_COLORS.items():
+            strip = info["strip"]
+            if key == "default":
+                self.assertIsNone(strip)
+                continue
+            with self.subTest(color=key):
+                self.assertIsInstance(strip, tuple)
+                self.assertEqual(len(strip), 2)
+
+    def test_strips_are_valid_hex(self):
+        for key, info in theme.CARD_COLORS.items():
+            if info["strip"] is None:
+                continue
+            for value in info["strip"]:
+                with self.subTest(color=key, value=value):
+                    self.assertRegex(value, r"^#[0-9a-fA-F]{6}$")
+
+    def test_the_light_strip_is_darker_than_the_dark_one(self):
+        """The light-mode strip has to carry against a pale card.
+
+        Reusing the dark-mode accent there is exactly the bug this pair
+        replaced, so the two members must not be equal — and the light one
+        must be the darker of the two.
+        """
+        def luminance(hex_color):
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+        for key, info in theme.CARD_COLORS.items():
+            if info["strip"] is None:
+                continue
+            light, dark = info["strip"]
+            with self.subTest(color=key):
+                self.assertNotEqual(light, dark)
+                self.assertLess(luminance(light), luminance(dark))
+
+    def test_resolve_picks_one_member_of_the_pair(self):
+        for key, info in theme.CARD_COLORS.items():
+            if info["strip"] is None:
+                continue
+            with self.subTest(color=key):
+                self.assertIn(theme.resolve(info["strip"]), info["strip"])
+
+
 if __name__ == "__main__":
     unittest.main()

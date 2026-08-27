@@ -10,6 +10,8 @@ file and remember its password.
 from __future__ import annotations
 
 import logging
+import threading
+import tkinter as tk
 import os
 
 import customtkinter as ctk
@@ -29,6 +31,43 @@ from ...theme import (
 from ..widgets import dialog_header, ios_field, ios_group, tip
 
 log = logging.getLogger("PasswordVault")
+
+
+def _run_busy(app, dlg, button, busy_text, work, done):
+    """Run *work* off the Tk thread, then hand its result to *done*.
+
+    Every entry point here derives a key, which is ~300ms of deliberate
+    PBKDF2 work. On the Tk thread that froze the dialog mid-click, with no
+    repaint to say the button had even been pressed.
+
+    *work* returns a value or raises; *done* is called on the Tk thread as
+    ``done(result, exception)``. The button is disabled for the duration so
+    a second Return cannot start a parallel derivation.
+    """
+    original = button.cget("text")
+    button.configure(state="disabled", text=busy_text)
+
+    def finish(result, exc):
+        try:
+            if not dlg.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
+            button.configure(state="normal", text=original)
+        except tk.TclError:
+            return
+        done(result, exc)
+
+    def runner():
+        try:
+            result = work()
+        except BaseException as exc:  # noqa: BLE001 - marshalled to the UI
+            app.root.after(0, lambda exc=exc: finish(None, exc))
+            return
+        app.root.after(0, lambda: finish(result, None))
+
+    threading.Thread(target=runner, daemon=True).start()
 
 
 # ─── Export Encrypted Backup ─────────────────────────────────
@@ -98,9 +137,16 @@ def show_export(app) -> None:
             initialfile="vault-backup.pvbak")
         if not path:
             return
-        try:
-            export_encrypted_backup(app.data, bp, path)
-        except (OSError, ValueError) as exc:
+        err.configure(text="")
+        _run_busy(
+            app, dlg, save_btn, t("⏳  Encrypting…"),
+            lambda: export_encrypted_backup(app.data, bp, path),
+            lambda _result, exc: _export_done(exc, path))
+
+    def _export_done(exc, path):
+        if exc is not None:
+            if not isinstance(exc, (OSError, ValueError)):
+                log.error("Backup export failed: %s", exc, exc_info=True)
             err.configure(text=f"⚠️ {exc}")
             return
         log.info("Encrypted backup exported by user.")
@@ -245,11 +291,11 @@ def _show_restore_dialog(app, *, on_restore, at_login: bool = False) -> None:
         if not bp:
             err.configure(text=t("⚠️ Enter the backup password"))
             return
-        try:
-            data = import_encrypted_backup(path, bp)
-        except (OSError, ValueError) as exc:
-            err.configure(text=f"⚠️ {exc}")
-            return
+
+        # Check the new master password before decrypting, not after: the
+        # decryption is ~300ms of PBKDF2 and it is wasted work if the user
+        # mistyped a field the dialog could have rejected immediately.
+        new_master = None
         if at_login:
             new_master = new_master_e.get() if new_master_e else ""
             new_conf = (new_master_conf_e.get()
@@ -266,11 +312,34 @@ def _show_restore_dialog(app, *, on_restore, at_login: bool = False) -> None:
             if ve:
                 err.configure(text=ve)
                 return
+
+        err.configure(text="")
+
+        def work():
+            data = import_encrypted_backup(path, bp)
+            # Derive the new master key here too — the second PBKDF2 pass
+            # costs the same again, and doing it in the callback would
+            # simply move the freeze rather than remove it. The salt is
+            # generated alongside the key it belongs to.
+            if not at_login:
+                return data, None
+            new_salt = os.urandom(32)
+            return data, (derive_key(new_master, new_salt), new_salt)
+
+        _run_busy(app, dlg, btn, t("⏳  Decrypting…"), work, _restore_done)
+
+    def _restore_done(result, exc):
+        if exc is not None:
+            if not isinstance(exc, (OSError, ValueError)):
+                log.error("Backup restore failed: %s", exc, exc_info=True)
+            err.configure(text=f"⚠️ {exc}")
+            return
+        data, new_key = result
         try:
-            on_restore(app, data, dlg, new_master if at_login else None)
-        except (OSError, ValueError) as exc:
+            on_restore(app, data, dlg, new_key)
+        except (OSError, ValueError) as restore_error:
             err.configure(text=t("⚠️ Restore failed: {error}",
-                                 error=exc))
+                                 error=restore_error))
             return
 
     btn = ctk.CTkButton(
@@ -295,7 +364,7 @@ def _basic_master_check(pw: str) -> str | None:
     return None
 
 
-def _restore_into_unlocked_vault(app, data: dict, dlg, _new_master) -> None:
+def _restore_into_unlocked_vault(app, data: dict, dlg, _key_and_salt) -> None:
     """Replace current entries with backup contents, re-encrypt with
     the existing master key. Leaves the master password unchanged."""
     previous = app.data
@@ -328,11 +397,15 @@ def _undo_salt(previous: bytes | None) -> None:
                      exc_info=True)
 
 
-def _restore_to_new_vault(app, data: dict, dlg, new_master: str) -> None:
-    """Restore at login: rotate salt, derive a new master key, save the
-    backup data encrypted with that key, then unlock the app."""
-    new_salt = os.urandom(32)
-    new_key = derive_key(new_master, new_salt)
+def _restore_to_new_vault(app, data: dict, dlg, key_and_salt) -> None:
+    """Restore at login: rotate salt, save the backup data under the new
+    master key, then unlock the app.
+
+    The key and its salt are derived by the caller's worker thread and
+    handed in together, so this function stays fast enough to run on the
+    Tk thread — it is only file writes.
+    """
+    new_key, new_salt = key_and_salt
     # Commit the salt before the ciphertext. This runs before unlock, so the
     # old master key is unknown and a failed write cannot be rolled back by
     # re-encrypting; putting the old salt back is the only recovery, and it
