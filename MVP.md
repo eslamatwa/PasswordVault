@@ -69,6 +69,26 @@ python -m pyflakes main.py password_vault tests
   existed silently discarded the rest.
 
 ### Correctness
+- **Remote credentials are no longer rewritten on their way to a client.**
+  `_sanitize_shell_arg` was an allowlist that *deleted* anything outside a
+  small set from the username and host: `svc+deploy` connected as
+  `svcdeploy`, and a non-Latin username was erased to an empty string, so
+  the client prompted as though no user had been given. It existed to stop
+  command injection, but every client is launched with an argument list,
+  which no shell parses. A value carrying a shell metacharacter is now
+  refused with a message naming it.
+- **MobaXterm gets correctly quoted arguments.** Its `-newtab` takes one
+  command string; the old code wrapped the username in literal single
+  quotes on the assumption that string was not shell-parsed. It is —
+  verified against MobaXterm 26.3 by having it run a script that printed
+  its own argv — so `shlex.quote` is the right quoting and a username with
+  a space or an apostrophe now survives.
+- **MobaXterm leads the client list**, so it is what Enter picks.
+- **The staged password outlives the client's startup.** It was cleared
+  after a flat 10 seconds, which is shorter than MobaXterm takes to
+  cold-start; the client then asked for a password the clipboard no longer
+  held. The floor is now 60 seconds, and a longer configured clipboard
+  timeout is respected.
 - Import/export round-trips `modified_at`, `pinned`, and datetime cells, and
   uses one field map for both directions.
 - Duplicate detection, the security score, and password age were reworked:

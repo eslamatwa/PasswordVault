@@ -107,8 +107,14 @@ SSH & RDP INTEGRATION
       - Host/IP input (auto-filled from entry URL)
       - Username (auto-filled from entry)
       - Port selection (auto-detected from URL)
-      - SSH Client chooser — auto-detects: PuTTY, MobaXterm, Windows OpenSSH
-      - Password auto-copied to clipboard on connect, cleared after 10s
+      - SSH Client chooser — auto-detects MobaXterm, PuTTY and Windows
+        OpenSSH, in that order, so MobaXterm is what Enter picks
+      - Password auto-copied to clipboard on connect and held for at least
+        60 seconds, which is longer than a client takes to cold-start and
+        ask for it
+      - The username and host are passed through exactly as typed. A value
+        carrying a shell metacharacter is refused with a message naming it,
+        rather than being quietly rewritten
   * RDP Session Dialog:
       - Host/IP input (auto-filled from entry URL)
       - Username and port configuration

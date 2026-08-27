@@ -15,6 +15,7 @@ import datetime
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -83,6 +84,11 @@ PASSWORD_MASK = "●" * 10
 
 # Card titles longer than this are elided; the full text moves to a tooltip.
 TITLE_MAX_CHARS = 38
+
+# How long the password stays on the clipboard for an SSH/RDP paste.
+# A flat 10s used to expire before MobaXterm had finished starting, so the
+# client asked for a password that was no longer there to paste.
+REMOTE_PASTE_SECONDS = 60
 
 # Categories whose entries always offer SSH / RDP actions.
 REMOTE_CATEGORIES = frozenset({"server", "vpn", "ssh", "rdp", "database"})
@@ -1786,8 +1792,36 @@ class PasswordVault:
     # ─── Detect available SSH/RDP clients ────────────────────
     @staticmethod
     def _detect_ssh_clients():
-        """Detect available SSH clients on the system."""
+        """Detect the SSH clients installed on this machine.
+
+        Order is the order of the dropdown, and the first entry is what a
+        user gets by pressing Enter — so MobaXterm leads. It is the richest
+        of the three (tabs, sessions, a built-in X server), and someone who
+        has installed it is not reaching for PuTTY by preference.
+        """
         clients = []
+
+        # MobaXterm. The Personal edition installs under the same tree with
+        # a different executable name.
+        moba_paths = [
+            os.path.join(os.environ.get("ProgramFiles(x86)", ""),
+                         "Mobatek", "MobaXterm", "MobaXterm.exe"),
+            os.path.join(os.environ.get("ProgramFiles", ""),
+                         "Mobatek", "MobaXterm", "MobaXterm.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Programs", "MobaXterm", "MobaXterm.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", ""),
+                         "Mobatek", "MobaXterm",
+                         "MobaXterm_Personal.exe"),
+            os.path.join(os.environ.get("ProgramFiles", ""),
+                         "Mobatek", "MobaXterm",
+                         "MobaXterm_Personal.exe"),
+        ]
+        for p in moba_paths:
+            if p and os.path.isfile(p):
+                clients.append(("MobaXterm", p))
+                break
+
         # PuTTY
         putty_paths = [
             os.path.join(os.environ.get("ProgramFiles", ""),
@@ -1802,24 +1836,7 @@ class PasswordVault:
                 clients.append(("PuTTY", p))
                 break
 
-        # MobaXterm
-        moba_paths = [
-            os.path.join(os.environ.get("ProgramFiles(x86)", ""),
-                         "Mobatek", "MobaXterm", "MobaXterm.exe"),
-            os.path.join(os.environ.get("ProgramFiles", ""),
-                         "Mobatek", "MobaXterm", "MobaXterm.exe"),
-            os.path.join(os.environ.get("LOCALAPPDATA", ""),
-                         "Programs", "MobaXterm", "MobaXterm.exe"),
-            os.path.join(os.environ.get("ProgramFiles(x86)", ""),
-                         "Mobatek", "MobaXterm",
-                         "MobaXterm_Personal.exe"),
-        ]
-        for p in moba_paths:
-            if p and os.path.isfile(p):
-                clients.append(("MobaXterm", p))
-                break
-
-        # Windows built-in SSH
+        # Windows built-in SSH, last: it is the fallback everyone has.
         win_ssh = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                                "System32", "OpenSSH", "ssh.exe")
         if os.path.isfile(win_ssh):
@@ -1949,8 +1966,17 @@ class PasswordVault:
                 err.configure(text=t("⚠️ Invalid port number"))
                 return
 
+            host_error = self._check_remote_arg(host, t("Host / IP"))
+            if host_error:
+                err.configure(text=host_error)
+                return
+
             if is_ssh:
                 user = user_e.get().strip() if user_e else ""
+                user_error = self._check_remote_arg(user, t("Username"))
+                if user_error:
+                    err.configure(text=user_error)
+                    return
                 if not clients:
                     err.configure(text=t("⚠️ No SSH client found on system"))
                     return
@@ -1961,22 +1987,20 @@ class PasswordVault:
                 if not client_path:
                     err.configure(text=t("⚠️ SSH client not found"))
                     return
-                self._copy_to_clipboard(entry.get("password", ""),
-                                         force_clear_seconds=10)
+                self._stage_password_for_paste(entry)
                 dlg.destroy()
                 self._launch_ssh(client_path, selected, host, user,
                                  port, entry.get("title", ""))
             else:
-                self._copy_to_clipboard(entry.get("password", ""),
-                                         force_clear_seconds=10)
+                self._stage_password_for_paste(entry)
                 dlg.destroy()
-                host = self._sanitize_shell_arg(host)
                 try:
                     rdp_target = (f"{host}:{port}"
                                   if port != default_port else host)
                     subprocess.Popen(["mstsc", f"/v:{rdp_target}"])
                 except OSError as exc:
                     log.warning("Failed to launch RDP: %s", exc)
+                    self._alert(t("Could not start the session"), str(exc))
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 12))
@@ -2012,66 +2036,114 @@ class PasswordVault:
         except ValueError:
             return default
 
+    # Characters that can end a command and start another one in the two
+    # places a shell is actually involved: cmd.exe, which runs the Windows
+    # SSH session, and MobaXterm's own shell. A value containing one of
+    # these is refused rather than altered.
+    _UNSAFE_REMOTE_CHARS = '&|<>^"`;\n\r\t\x00'
+
     @staticmethod
-    def _sanitize_shell_arg(value: str) -> str:
-        """Remove dangerous characters from a value used in shell args."""
-        # Allow alphanumeric, dots, hyphens, underscores, @, colons,
-        # backslash (for domain\user), forward slash
-        cleaned = re.sub(r'[^a-zA-Z0-9.\-_@:/\\ ]', '', value)
-        # A leading hyphen survives that filter and every client here reads
-        # its arguments as options first, so a host imported from an
-        # untrusted file could arrive as a flag rather than a destination.
-        return cleaned.lstrip("-")
+    def _check_remote_arg(value: str, field: str) -> str | None:
+        """Return an error message if *value* cannot be passed on safely.
+
+        This replaced a filter that *deleted* anything outside a small
+        allowlist, which quietly corrupted ordinary logins — `svc+deploy`
+        connected as `svcdeploy`, and a non-Latin username was erased to
+        nothing at all. Silently changing a credential is worse than
+        refusing it: the connection fails in a way that looks like the
+        server's fault.
+
+        The arguments themselves are passed to `subprocess` as a list, so
+        no shell parses them and nothing needs escaping there. Only the two
+        shell-mediated paths need this guard.
+        """
+        bad = [c for c in PasswordVault._UNSAFE_REMOTE_CHARS if c in value]
+        if bad:
+            shown = " ".join(repr(c) for c in bad)
+            return t("⚠️ {field} contains characters that cannot be passed "
+                     "to a terminal: {chars}", field=field, chars=shown)
+        if value.startswith("-"):
+            # Every client reads its arguments as options first, so a host
+            # or user starting with a hyphen would arrive as a flag.
+            return t("⚠️ {field} cannot start with '-'", field=field)
+        return None
+
+    @staticmethod
+    def ssh_command(client_name, client_path, host, user, port):
+        """Build the argument list for *client_name*.
+
+        Split out from the launch so the exact arguments each client
+        receives can be asserted in tests — the previous version quietly
+        rewrote them, and there was no way to see what came out.
+
+        Every client here takes its arguments through `subprocess` as a
+        list, so nothing is shell-parsed on the way. The one exception is
+        MobaXterm, whose `-newtab` takes a single command string that its
+        own shell splits; that string is built with `shlex.quote`, which
+        is exactly the quoting that shell undoes.
+        """
+        port = int(port)
+        if client_name == "PuTTY":
+            cmd = [client_path, "-ssh"]
+            if user:
+                cmd += ["-l", user]
+            if port != 22:
+                cmd += ["-P", str(port)]
+            cmd.append(host)
+            return cmd
+
+        if client_name == "MobaXterm":
+            parts = ["ssh"]
+            if user:
+                parts += ["-l", user]
+            if port != 22:
+                parts += ["-p", str(port)]
+            parts.append(host)
+            return [client_path, "-newtab",
+                    " ".join(shlex.quote(p) for p in parts)]
+
+        # Windows OpenSSH, wrapped in `cmd /k` so the console stays up
+        # after the session ends and an immediate failure stays readable.
+        cmd = [client_path]
+        if user:
+            cmd += ["-l", user]
+        if port != 22:
+            cmd += ["-p", str(port)]
+        cmd.append(host)
+        return ["cmd", "/k"] + cmd
+
+    def _stage_password_for_paste(self, entry) -> None:
+        """Put the entry's password on the clipboard to paste into a client.
+
+        The window used to be a flat 10 seconds, which was shorter than
+        MobaXterm takes to cold-start: by the time the client asked for a
+        password, the clipboard had already been wiped and the prompt
+        looked like the app had simply not copied anything.
+
+        `REMOTE_PASTE_SECONDS` is the floor. A user who has configured a
+        longer clipboard timeout keeps it — they have already said how long
+        they are willing to leave a password there, and this is the one
+        flow where they are about to paste it.
+        """
+        configured = self.settings.get("clipboard_clear_seconds", 30)
+        window = max(REMOTE_PASTE_SECONDS, configured)
+        self._copy_to_clipboard(entry.get("password", ""),
+                                force_clear_seconds=window)
 
     def _launch_ssh(self, client_path, client_name, host, user, port, title):
-        """Launch SSH session using the selected client."""
-        # Sanitize all user-supplied values to prevent command injection
-        host = self._sanitize_shell_arg(host)
-        user = self._sanitize_shell_arg(user)
-        port = int(port)
+        """Launch an SSH session with the selected client."""
+        cmd = self.ssh_command(client_name, client_path, host, user, port)
         try:
-            if client_name == "PuTTY":
-                cmd = [client_path, "-ssh"]
-                if user:
-                    cmd += ["-l", user]
-                if port != 22:
-                    cmd += ["-P", str(port)]
-                cmd.append(host)
-                subprocess.Popen(cmd)
-
-            elif client_name == "MobaXterm":
-                # Use -l flag to preserve backslash in domain\user
-                ssh_parts = ["ssh"]
-                if user:
-                    # Single-quote the username so MobaXterm's internal
-                    # bash does not interpret the backslash as escape
-                    safe_user = user.replace("'", "'\\''")
-                    ssh_parts += ["-l", f"'{safe_user}'"]
-                if port != 22:
-                    ssh_parts += ["-p", str(port)]
-                ssh_parts.append(host)
-                subprocess.Popen([client_path, "-newtab",
-                                  " ".join(ssh_parts)])
-
-            elif client_name == "Windows SSH":
-                # Use -l flag to preserve backslash in domain\user
-                cmd = [client_path]
-                if user:
-                    cmd += ["-l", user]
-                cmd.append(host)
-                if port != 22:
-                    cmd += ["-p", str(port)]
-                # Open in a new visible console window
+            if client_name == "Windows SSH":
                 subprocess.Popen(
-                    ["cmd", "/c", "start",
-                     self._sanitize_shell_arg(
-                         f"SSH - {title} ({host})"),
-                     "cmd", "/k"] + cmd,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE
-                )
+                    cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            else:
+                subprocess.Popen(cmd)
+            log.info("Launched %s session for %r.", client_name, title)
         except OSError as exc:
             log.warning("Failed to launch SSH client %s: %s",
                         client_name, exc)
+            self._alert(t("Could not start the session"), str(exc))
 
     # ─── Password Generator Dialog ───────────────────────────
     def _show_generator(self, target_entry):

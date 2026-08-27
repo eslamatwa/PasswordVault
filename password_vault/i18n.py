@@ -588,6 +588,11 @@ ARABIC: dict[str, str] = {
     "⚠️ Invalid port number": "⚠️ رقم منفذ غير صالح",
     "⚠️ No SSH client found on system": "⚠️ لا يوجد عميل SSH على النظام",
     "⚠️ SSH client not found": "⚠️ لم يُعثر على عميل SSH",
+    "⚠️ {field} contains characters that cannot be passed to a terminal: "
+    "{chars}":
+        "⚠️ {field} يحتوي على رموز لا يمكن تمريرها إلى الطرفية: {chars}",
+    "⚠️ {field} cannot start with '-'": "⚠️ {field} لا يمكن أن يبدأ بـ '-'",
+    "Could not start the session": "تعذّر بدء الجلسة",
 
     # ── Mini vault & floating widget ──
     "Mini Vault": "الخزنة المصغّرة",

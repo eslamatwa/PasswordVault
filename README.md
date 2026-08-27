@@ -75,8 +75,15 @@ Shortcuts and `Ctrl+C/V/X/A` are matched by physical key, so they keep working u
   - Host/IP input (auto-filled from entry URL)
   - Username (auto-filled from entry)
   - Port selection (auto-detected from URL)
-  - **SSH Client chooser** — Auto-detects installed clients: PuTTY, MobaXterm, Windows OpenSSH
-  - Password auto-copied to clipboard on connect
+  - **SSH Client chooser** — Auto-detects MobaXterm, PuTTY and Windows OpenSSH, in that order, so MobaXterm is the default when installed
+  - Password auto-copied to clipboard on connect, held for at least 60 seconds — long enough for a client to finish starting and prompt for it
+
+  Credentials are passed to the client exactly as typed. Each client is
+  launched with an argument list, which no shell parses; MobaXterm's
+  `-newtab` takes a single command string that its own shell splits, so
+  that one is built with `shlex.quote`. A host or username containing a
+  shell metacharacter is refused with a message naming the character
+  rather than being silently rewritten.
 - **RDP Session Dialog** — Launch Remote Desktop with:
   - Host/IP input (auto-filled from entry URL)
   - Username and port configuration
