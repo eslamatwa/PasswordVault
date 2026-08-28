@@ -35,3 +35,4 @@ vault.salt
 .idea/
 *.swp
 
+dist-new/
