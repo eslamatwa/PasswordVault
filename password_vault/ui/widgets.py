@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import tkinter as tk
+import tkinter.font as tkfont
 import customtkinter as ctk
 
 from ..i18n import (
@@ -231,32 +232,157 @@ def row_label(parent, text, bg, fg, font=None, **pack_kwargs):
     return label
 
 
-def icon_button(parent, text, command, *, bg, hover, fg,
-                font=None, cursor="hand2", **pack_kwargs):
-    """A small borderless button, built from a label.
+# --- Rounded pills, without CustomTkinter's price -------------
+#
+# The cards were rebuilt on plain Tk widgets because a CTkButton costs
+# 25-35x a tk.Label, and the small buttons on them lost their rounded
+# corners in the move. Three ways to get the corners back were measured:
+#
+#   CTkButton                     6.00 ms each   (what was removed)
+#   CTkCanvas + CTk's DrawEngine  4.03 ms each
+#   tk.Label + a cached pill      0.48 ms each   <- this one
+#   tk.Label, square              0.42 ms each   (the baseline)
+#
+# So the shape costs 15% on top of a plain label rather than 14x it. The
+# pill is a tk.PhotoImage drawn once per (size, colour) pair and reused;
+# the label draws its text over it with `compound="center"`.
+#
+# The corners are antialiased here, in Python. Tk will not antialias a
+# canvas polygon, and Pillow is not a dependency of this project - adding
+# one to round six 24px buttons would be a poor trade, and it would grow
+# the one-file exe for the same six buttons.
 
-    The visible difference from a CTkButton is the corner radius, which on
-    a 24px square with no fill was never apparent. Everything that matters
-    is kept: the hover cue, the hand cursor, the click, and tooltips —
-    `tip()` binds with ``add="+"``, so it layers on top of the hover
-    bindings rather than replacing them.
+_PILL_CACHE: dict = {}
+_PILL_FONTS: dict = {}
+_PILL_TK = None          # the interpreter the caches above belong to
+_SS = 4                  # supersampling, per axis, inside the corners
+
+
+def _pill_reset_if_stale(widget) -> None:
+    """Drop the caches when the Tk interpreter has been replaced.
+
+    A PhotoImage belongs to the interpreter that created it. Tests build
+    and destroy a root per module, so a cache surviving across roots would
+    hand out images that raise as soon as they are drawn.
     """
-    rest, over = resolve(bg), resolve(hover)
-    label = tk.Label(parent, text=text, bg=rest, fg=resolve(fg),
-                     font=font or ("Segoe UI Emoji", 10), bd=0,
-                     highlightthickness=0, padx=5, pady=1, cursor=cursor)
+    global _PILL_TK
+    if widget.tk is not _PILL_TK:
+        _PILL_CACHE.clear()
+        _PILL_FONTS.clear()
+        _PILL_TK = widget.tk
+
+
+def pill_font(widget, spec):
+    """A measuring font for *spec*, cached per interpreter."""
+    _pill_reset_if_stale(widget)
+    key = tuple(spec)
+    if key not in _PILL_FONTS:
+        _PILL_FONTS[key] = tkfont.Font(font=spec)
+    return _PILL_FONTS[key]
+
+
+def pill_image(widget, width, height, radius, fill, behind):
+    """A rounded rectangle of *fill* on *behind*, as a cached PhotoImage.
+
+    Both colours are baked in because a Tk image has no alpha channel:
+    the corners have to be blended against whatever sits behind them,
+    which is why the card colour is part of the cache key.
+    """
+    _pill_reset_if_stale(widget)
+    width, height = max(int(width), 1), max(int(height), 1)
+    fill, behind = resolve(fill), resolve(behind)
+    key = (width, height, radius, fill, behind)
+    cached = _PILL_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    fr, fg_, fb = (c // 256 for c in widget.winfo_rgb(fill))
+    br, bg_, bb = (c // 256 for c in widget.winfo_rgb(behind))
+    solid = "#%02x%02x%02x" % (fr, fg_, fb)
+    r = max(0, min(int(radius), width // 2, height // 2))
+
+    # A corner pixel takes one of _SS*_SS+1 coverage values, so the blends
+    # are worth computing once rather than per pixel.
+    steps = _SS * _SS
+    blend = ["#%02x%02x%02x" % (round(br + (fr - br) * i / steps),
+                                round(bg_ + (fg_ - bg_) * i / steps),
+                                round(bb + (fb - bb) * i / steps))
+             for i in range(steps + 1)]
+
+    rows = []
+    for y in range(height):
+        row = []
+        cy = (r - 0.5 if y < r
+              else (height - r - 0.5 if y >= height - r else None))
+        for x in range(width):
+            cx = (r - 0.5 if x < r
+                  else (width - r - 0.5 if x >= width - r else None))
+            if cx is None or cy is None:
+                row.append(solid)
+                continue
+            hits = 0
+            for sy in range(_SS):
+                dy = y + (sy + 0.5) / _SS - 0.5 - cy
+                for sx in range(_SS):
+                    dx = x + (sx + 0.5) / _SS - 0.5 - cx
+                    if dx * dx + dy * dy <= r * r:
+                        hits += 1
+            row.append(blend[hits])
+        rows.append("{" + " ".join(row) + "}")
+
+    image = tk.PhotoImage(master=widget, width=width, height=height)
+    image.put(" ".join(rows))
+    _PILL_CACHE[key] = image
+    return image
+
+
+def _wear_pill(label, text, fill) -> None:
+    """Redraw *label* as a pill of *fill*, wide enough for *text*."""
+    shape = label._pill
+    font = pill_font(label, shape["font"])
+    width = font.measure(text) + 2 * shape["padx"]
+    try:
+        label.configure(
+            text=text,
+            image=pill_image(label, width, shape["height"], shape["radius"],
+                             fill, shape["behind"]))
+    except tk.TclError:
+        pass
+
+
+def icon_button(parent, text, command, *, bg, hover, fg, behind=None,
+                font=None, radius=6, cursor="hand2", **pack_kwargs):
+    """A small rounded button, built from a label and a cached image.
+
+    Kept from the CTkButton this replaced: the corner radius, the hover
+    cue, the hand cursor, the click, and tooltips - `tip()` binds with
+    ``add="+"``, so it layers on top of the hover bindings rather than
+    replacing them.
+    """
+    font = font or ("Segoe UI Emoji", 10)
+    if behind is None:
+        try:
+            behind = parent.cget("bg")
+        except tk.TclError:
+            behind = bg
+    padx, pady = 6, 2
+    height = pill_font(parent, font).metrics("linespace") + 2 * pady
+    label = tk.Label(parent, compound="center", fg=resolve(fg), font=font,
+                     bd=0, highlightthickness=0, cursor=cursor,
+                     bg=resolve(behind))
+    label._pill = {"font": font, "padx": padx, "height": height,
+                   "radius": radius, "behind": behind,
+                   "rest": bg, "hover": hover, "text": text,
+                   "flashing": False}
+    _wear_pill(label, text, bg)
 
     def enter(_event):
-        try:
-            label.configure(bg=over)
-        except tk.TclError:
-            pass
+        if not label._pill["flashing"]:
+            _wear_pill(label, label._pill["text"], label._pill["hover"])
 
     def leave(_event):
-        try:
-            label.configure(bg=rest)
-        except tk.TclError:
-            pass
+        if not label._pill["flashing"]:
+            _wear_pill(label, label._pill["text"], label._pill["rest"])
 
     label.bind("<Enter>", enter, add="+")
     label.bind("<Leave>", leave, add="+")
@@ -267,25 +393,40 @@ def icon_button(parent, text, command, *, bg, hover, fg,
     return label
 
 
-def flash_icon(widget, text, colour, revert_text, revert_bg,
-               after_ms=1000):
-    """Briefly change an icon button, then put it back.
+def flash_button(btn, text, colour, after_ms=1000) -> None:
+    """Briefly show *text* on *btn* in *colour*, then put it back.
 
-    The CTkButton version of this swapped `fg_color`; a label swaps `bg`.
+    Handles both kinds of button this app has: a CTkButton swaps its
+    `fg_color`, a pill label is redrawn. Reading `fg_color` off a plain
+    label is what used to raise here, and because the raise landed after
+    the copy but before the auto-clear was scheduled, the secret stayed
+    on the clipboard until something else overwrote it.
     """
-    try:
-        widget.configure(text=text, bg=resolve(colour))
-    except tk.TclError:
+    if not hasattr(btn, "_pill"):
+        try:
+            original, fill = btn.cget("text"), btn.cget("fg_color")
+            btn.configure(text=text, fg_color=resolve(colour))
+        except (tk.TclError, ValueError):
+            return
+        btn.after(after_ms, lambda: safe_cfg(btn, original, fill))
         return
-    widget.after(after_ms,
-                 lambda: safe_label_cfg(widget, revert_text, revert_bg))
 
+    original = btn._pill["text"]
+    btn._pill["flashing"] = True
+    _wear_pill(btn, text, colour)
 
-def safe_label_cfg(label, text, bg) -> None:
-    """Configure a label's text and background, ignoring a dead widget."""
+    def restore():
+        try:
+            if not btn.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        btn._pill["flashing"] = False
+        _wear_pill(btn, original, btn._pill["rest"])
+
     try:
-        label.configure(text=text, bg=resolve(bg))
-    except (tk.TclError, ValueError):
+        btn.after(after_ms, restore)
+    except tk.TclError:
         pass
 
 

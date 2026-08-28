@@ -56,8 +56,8 @@ from password_vault.security import (
     password_strength, password_age_text, safe_url, password_hash,
 )
 from password_vault.ui.widgets import (
-    row_frame, row_label, icon_button,
-    tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
+    row_frame, row_label, icon_button, flash_button,
+    tip, ios_group, ios_field, ios_combo, make_search_bar,
     bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
     ui_font, elide, filter_entries, dialog_header, button_row, CardPool,
     card_signature,
@@ -2600,6 +2600,8 @@ class PasswordVault:
 
     # ─── Mini / Widget Logic ─────────────────────────────────
     def toggle_mini_vault(self):
+        log.debug("Mini Vault toggled (exists=%s).",
+                  bool(self.mini_vault and self.mini_vault.winfo_exists()))
         if self.mini_vault and self.mini_vault.winfo_exists():
             if self.mini_vault.state() == "withdrawn":
                 self.mini_vault.deiconify()
@@ -2613,6 +2615,7 @@ class PasswordVault:
                 self.restore_window()
 
     def minimize_to_widget(self):
+        log.info("Minimising to the floating widget.")
         self._flush_pending_save()
         self.root.withdraw()
         if not self.floating_widget:
@@ -2620,7 +2623,7 @@ class PasswordVault:
         self.floating_widget.deiconify()
 
     def restore_window(self):
-
+        log.info("Restoring the main window.")
         if self.mini_vault:
             try:
                 self.mini_vault.withdraw()
@@ -2839,12 +2842,12 @@ class PasswordVault:
                         "This system has no working clipboard, so nothing "
                         "was copied.")
             return
+        # Not `btn.cget("fg_color")`: the cards are plain Tk now, that
+        # option does not exist on them, and the raise happened here --
+        # after the copy, before the auto-clear below was scheduled, so
+        # the password stayed on the clipboard.
         if btn:
-            orig = btn.cget("text")
-            orig_fg = btn.cget("fg_color")
-            btn.configure(text=t("✅ Done!"), fg_color=GREEN)
-            self.root.after(
-                1000, lambda: safe_cfg(btn, orig, orig_fg))
+            flash_button(btn, t("✅ Done!"), GREEN)
         clear_sec = (force_clear_seconds
                      if force_clear_seconds is not None
                      else self.settings.get("clipboard_clear_seconds", 30))
@@ -2858,11 +2861,15 @@ class PasswordVault:
                 clear_sec * 1000, self._clear_clipboard)
 
     def run(self):
-
+        log.info("UI ready (start_minimized=%s, vault_exists=%s, theme=%s).",
+                 self.settings.get("start_minimized", False),
+                 os.path.exists(DATA_FILE),
+                 self.settings.get("theme", "Dark"))
         if (self.settings.get("start_minimized", False)
                 and os.path.exists(DATA_FILE)):
             self.root.after(200, self.minimize_to_widget)
         self.root.mainloop()
+        log.info("Main loop returned.")
 
 
 # Every module the app imports lazily, and so every module a frozen build
@@ -2921,13 +2928,28 @@ def self_test() -> int:
 
 
 if __name__ == "__main__":
+    # Logging is already running: password_vault/__init__.py attaches the
+    # rotating file handler when the package is imported. This only marks
+    # where one run starts, so a log covering several runs can be split up.
+    if "--debug" in sys.argv:
+        logging.getLogger().setLevel(logging.DEBUG)
+    log.info("=== Starting Password Vault (pid %s, argv %s) ===",
+             os.getpid(), sys.argv[1:])
     if "--self-test" in sys.argv:
         sys.exit(self_test())
     if not instance_lock.acquire():
         # A second copy would load its own snapshot of the vault and write it
         # back in full, discarding whatever the first one saved meanwhile.
-        log.info("Another instance is already running; focusing it.")
+        log.info("Another instance is already running; focusing it "
+                 "and exiting this one.")
         instance_lock.focus_existing()
         sys.exit(0)
-    PasswordVault().run()
+    try:
+        PasswordVault().run()
+    except BaseException:
+        # Otherwise a crash in a windowed build leaves nothing at all.
+        log.exception("Unhandled exception; the app is going down.")
+        raise
+    finally:
+        log.info("Password Vault exited (pid %s).", os.getpid())
 
