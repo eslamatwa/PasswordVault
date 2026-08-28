@@ -447,6 +447,59 @@ and start again.
 ---
 
 
+## Signing the build
+
+The build is unsigned, and on Windows 11 that has consequences:
+SmartScreen warns about it, and **Smart App Control blocks it outright**
+when it is enabled. On a machine with Smart App Control on, the file will
+not run at all until it is either signed with a certificate Windows
+trusts *and* has reputation for, or explicitly allowed.
+
+`tools/sign.ps1` does the signing once you have a certificate:
+
+```
+.\tools\sign.ps1 -Thumbprint <hash>
+.\tools\sign.ps1 -PfxPath .\codesign.pfx
+```
+
+It needs `signtool.exe` from the Windows SDK
+(`winget install Microsoft.WindowsSDK.10.0.26100`), signs SHA-256, and
+timestamps through an RFC 3161 server. **The timestamp is not optional:**
+without one, every copy already shipped stops verifying the day the
+certificate expires. With one, the signature outlives the certificate.
+
+### What each kind of certificate actually gets you
+
+| | Unknown-publisher warning | Smart App Control |
+|---|---|---|
+| Unsigned | Yes | **Blocked** |
+| Self-signed | Yes, and looks worse | **Blocked** |
+| OV certificate | Gone | Only once reputation accumulates |
+| EV certificate / Azure Trusted Signing | Gone | Passes from the start |
+
+A **self-signed certificate does not help here**, which is worth stating
+plainly because it is the obvious thing to reach for. Smart App Control
+wants a signature that chains to a trusted root and carries reputation; a
+certificate you made yourself has neither. Making Windows trust it means
+installing it into the trusted root store, which tells that machine to
+trust anything signed with that key — a worse position than shipping
+unsigned — and Smart App Control would still block the file for want of
+reputation. `-SelfSigned` exists in the script only to prove the plumbing
+works, and it removes the throwaway key afterwards.
+
+The practical options are **Azure Trusted Signing** (a Microsoft service,
+cheap monthly, identity verification required) or an **EV code-signing
+certificate** from a CA. A plain OV certificate removes the publisher
+warning but leaves Smart App Control to be won over by download volume.
+
+### Running it anyway, on your own machine
+
+Turning Smart App Control off is **one-way**: once disabled it cannot be
+re-enabled without reinstalling Windows. Do not reach for it to get past
+a build you made five minutes ago. Unblock the single file instead —
+Properties → Unblock, or allow it from the Smart App Control prompt.
+
+
 ## Running the tests
 
 ```

@@ -113,6 +113,20 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **A signing pipeline, and an honest note about what it can do.** The
+  built exe is unsigned, and Smart App Control blocks unsigned binaries
+  outright rather than warning about them. `tools/sign.ps1` signs and
+  timestamps once a certificate exists — timestamped, so shipped copies
+  keep verifying after the certificate expires.
+
+  What it cannot do is make a self-signed certificate work. Smart App
+  Control wants a trusted chain *and* reputation; a self-made certificate
+  has neither, and the only way to fake the first half is installing it
+  as a trusted root, which is a worse security position than shipping
+  unsigned and still fails the second half. Recorded here because it is
+  the obvious thing to try. Azure Trusted Signing or an EV certificate
+  are the routes that actually work.
+
 - **Several SSH sessions at once.** Ten servers meant ten trips through
   the same dialog, re-picking the same client each time. The new dialog
   lists everything the right-click menu would offer SSH for — the same
