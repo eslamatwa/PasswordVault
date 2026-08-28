@@ -8,6 +8,7 @@ that the panel holding ten passwords does not outlive the lock.
 
 from __future__ import annotations
 
+import pathlib
 import time
 import tkinter as tk
 
@@ -330,6 +331,60 @@ class TestTheDialog:
                 "لا يوجد" in _all_text(dlg)
         finally:
             dlg.destroy()
+            app.root.update()
+
+
+class TestHowYouReachIt:
+    """Two ways in, and the right-click menu keeps its two per-entry
+    items — SSH and RDP — untouched."""
+
+    def test_the_right_click_menu_still_offers_both_single_sessions(
+            self, app):
+        source = (pathlib.Path(__file__).resolve().parent.parent
+                  / "main.py").read_text(encoding="utf-8")
+        assert '_show_ssh_dialog(entry)' in source
+        assert '_show_rdp_dialog(entry)' in source
+
+    def test_the_ssh_dialog_offers_the_batch(self, app):
+        _servers(app, [_entry()])
+        app._show_ssh_dialog(app.data["entries"][0])
+        app.root.update()
+        dlg = app._grab_stack[-1]
+        try:
+            assert _buttons(dlg, "several servers"),                 "no way through to the batch from the SSH dialog"
+        finally:
+            dlg.destroy()
+            app.root.update()
+
+    def test_the_rdp_dialog_does_not(self, app):
+        """The batch opens SSH sessions. Offering it from the RDP dialog
+        would promise something it does not do."""
+        _servers(app, [_entry()])
+        app._show_rdp_dialog(app.data["entries"][0])
+        app.root.update()
+        dlg = app._grab_stack[-1]
+        try:
+            assert not _buttons(dlg, "several servers")
+        finally:
+            dlg.destroy()
+            app.root.update()
+
+    def test_following_it_closes_the_single_dialog(self, app, bulk):
+        """Two modal dialogs stacked on the same job is a grab to unwind
+        and a window the user has to dismiss twice."""
+        _servers(app, [_entry()])
+        app._show_ssh_dialog(app.data["entries"][0])
+        app.root.update()
+        single = app._grab_stack[-1]
+        _buttons(single, "several servers")[0].invoke()
+        app.root.update()
+        try:
+            assert not single.winfo_exists(),                 "the single-session dialog was left underneath"
+            assert app._grab_stack, "the batch dialog did not open"
+            assert "web01" in _all_text(app._grab_stack[-1])
+        finally:
+            for dlg in list(app._grab_stack):
+                dlg.destroy()
             app.root.update()
 
 

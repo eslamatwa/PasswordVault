@@ -254,6 +254,9 @@ ARABIC: dict[str, str] = {
 
     # ── Opening several SSH sessions at once ──
     "🖥️  Open Multiple SSH Sessions …": "🖥️  فتح عدة جلسات SSH …",
+    "🖥️  Connect to several servers …": "🖥️  الاتصال بعدة خوادم …",
+    "Pick several servers from the vault and open them all":
+        "اختر عدة خوادم من الخزنة وافتحها كلها",
     "🖥️  Open Multiple SSH Sessions": "🖥️  فتح عدة جلسات SSH",
     "Open Multiple SSH Sessions": "فتح عدة جلسات SSH",
     "🖥️  Open sessions": "🖥️  افتح الجلسات",

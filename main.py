@@ -2072,6 +2072,23 @@ class PasswordVault:
             form, text=t("💡 Password will be copied to clipboard"),
             font=ctk.CTkFont(size=9), text_color=TEXT_TERT).pack(fill="x")
 
+        # The batch belongs here rather than only in the main menu: the
+        # moment a user notices they want ten of these is the moment they
+        # are looking at the dialog for one of them.
+        if is_ssh:
+            def to_batch():
+                dlg.destroy()
+                self.show_bulk_ssh_dialog()
+
+            many_btn = ctk.CTkButton(
+                form, text=t("🖥️  Connect to several servers …"),
+                height=30, font=ctk.CTkFont(size=11), fg_color="transparent",
+                hover_color=BG_TERT, text_color=ACCENT, corner_radius=8,
+                command=to_batch)
+            many_btn.pack(fill="x", pady=(6, 0))
+            tip(many_btn,
+                t("Pick several servers from the vault and open them all"))
+
         def connect():
             host = host_e.get().strip()
             port_str = port_e.get().strip()

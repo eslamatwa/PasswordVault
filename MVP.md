@@ -137,6 +137,14 @@ python -m pyflakes main.py password_vault tests
   would read as a bug in the list — and never rewritten, which is the
   rule the single-session flow already follows.
 
+  Two ways in. The main menu has it, and so does the single-session SSH
+  dialog — the moment someone notices they want ten of these is the
+  moment they are looking at the dialog for one. Following it closes the
+  single dialog rather than stacking a second modal on the same job. The
+  RDP dialog does not offer it, because the batch opens SSH sessions and
+  putting it there would promise something it does not do. The
+  right-click menu keeps its two per-entry items unchanged.
+
   Writing the tests found a real defect: the chain outlived whatever
   started it, so a batch kept opening sessions after the vault
   auto-locked. It surfaced as launches from one test appearing in the
