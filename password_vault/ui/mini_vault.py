@@ -15,7 +15,7 @@ from ..theme import (
 )
 from ..security import password_age_text
 from .widgets import (
-    row_frame, row_label, icon_button,
+    row_frame, row_label, icon_button, CardPool, card_signature,
     make_search_bar, tip, bind_right_click_recursive,
     add_color_strip, sort_entries_pinned_first, ui_font, elide,
     filter_entries,
@@ -39,6 +39,11 @@ class MiniVault(ctk.CTkToplevel):
         self._mini_cat = "All"
         self._search_after_id = None
         self._visible_limit = MINI_PAGE_SIZE
+        # The same card pool the main list uses. Rebuilding every row on
+        # each keystroke costs far more than hiding and showing them.
+        self._cards = CardPool(self._mini_card, card_signature,
+                               fill="x", pady=3, padx=2)
+        self._extras: list = []
         self.title(t("Mini Vault"))
         self.geometry("340x420")
         self.overrideredirect(True)
@@ -138,21 +143,43 @@ class MiniVault(ctk.CTkToplevel):
         self.app.restore_window()
 
     def _refresh(self):
-        for w in self.list_frame.winfo_children():
-            w.destroy()
+        """Show the entries matching the category and search.
+
+        Cards are kept and re-packed rather than rebuilt, for the same
+        reason the main list does it: destroying and recreating a row of
+        widgets costs far more than unmapping it.
+        """
+        for widget in self._extras:
+            try:
+                widget.destroy()
+            except tk.TclError:
+                pass
+        self._extras.clear()
+
         if not self.app.data:
+            self._cards.clear()
             return
+
         entries = filter_entries(
             self.app.data.get("entries", []), self._mini_cat,
             self.search_var.get())
         entries = sort_entries_pinned_first(entries)
+
+        live = {e.get("id") for e in self.app.data.get("entries", [])
+                if e.get("id")}
+        self._cards.keep_only(live)
+        self._cards.hide_all()
+
         if not entries:
-            ctk.CTkLabel(self.list_frame, text=t("No results"),
-                          font=ui_font(12, family=None),
-                          text_color=TEXT_TERT).pack(pady=40)
+            empty = ctk.CTkLabel(self.list_frame, text=t("No results"),
+                                  font=ui_font(12, family=None),
+                                  text_color=TEXT_TERT)
+            empty.pack(pady=40)
+            self._extras.append(empty)
             return
+
         for entry in entries[:self._visible_limit]:
-            self._mini_card(entry)
+            self._cards.show(entry, entry.get("id"))
         hidden = len(entries) - self._visible_limit
         if hidden > 0:
             more = ctk.CTkButton(
@@ -162,6 +189,7 @@ class MiniVault(ctk.CTkToplevel):
                 fg_color=BG_SEC, hover_color=BG_TERT, corner_radius=6,
                 text_color=TEXT_SEC, command=self._show_more)
             more.pack(fill="x", padx=2, pady=(4, 6))
+            self._extras.append(more)
 
     def _show_more(self):
         self._visible_limit += MINI_PAGE_SIZE
@@ -240,8 +268,10 @@ class MiniVault(ctk.CTkToplevel):
         cc = CARD_COLORS.get(color_key, CARD_COLORS["default"])
         bg = cc["bg"]
 
-        card = ctk.CTkFrame(self.list_frame, fg_color=bg, corner_radius=10)
-        card.pack(fill="x", pady=3, padx=2)
+        card = ctk.CTkFrame(self.list_frame, fg_color=bg,
+                              corner_radius=10)
+        # Not packed here: the pool owns where it goes, so a cached card
+        # can be hidden and re-shown without being rebuilt.
 
         # Right-click context menu binding (applied recursively after build)
         def _on_right_click(event, e=entry):
@@ -320,6 +350,7 @@ class MiniVault(ctk.CTkToplevel):
         # Done synchronously here (the card is fully built above) — no
         # after-delay needed.
         bind_right_click_recursive(card, _on_right_click)
+        return card
 
     def _mini_edit(self, entry):
         self.app.restore_window()

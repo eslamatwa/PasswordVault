@@ -113,10 +113,20 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
-- **The Mini Vault's cards are plain Tk widgets too.** Same reasoning as
-  the main list, smaller surface: 7 plain widgets a card instead of a
-  CustomTkinter row, colours verified in both modes, and hover, copy and
-  the right-click menu all still working.
+- **The Mini Vault's cards are plain Tk widgets too**, and share the main
+  list's cache. `CardPool` in `ui/widgets.py` owns the reuse and the
+  invalidation for both lists, with one `card_signature` deciding what
+  counts as a change — a second copy would be a second place for those
+  rules to drift apart. Filtering the Mini Vault, which is what its search
+  box does on every keystroke, went from 190 ms to 50 ms. Showing an
+  unfiltered list costs the same as before: the paint happens either way,
+  and building seven small widgets was never the expensive part there.
+
+  Extracting it caught a bug that was about to ship. A theme change
+  refreshed the Mini Vault without clearing its cache, so it re-showed
+  cards still holding the previous palette while the main window updated
+  around them. One line, and only findable by switching the theme with
+  the window open.
 - **The entry list is 36x faster.** A repaint used to cost about a quarter
   of a second per row, on the surface that repaints on startup, on every
   settled search keystroke, on a category switch, and after every add,
@@ -333,10 +343,6 @@ later is invisible in English, so the check has to be static.
 Nothing at this size is outstanding. Rendering the entry list was the last
 one and is in *Done* above. The next candidates, none started:
 
-- **Reuse in the Mini Vault.** Its cards are plain Tk widgets now, but it
-  still rebuilds them on every refresh. The main list's card pool would
-  apply directly; doing it well means extracting that logic rather than
-  writing it twice, which is why it is not done yet.
 - **A third interface language** is now purely a data change: add a catalog
   to `CATALOG` and a code to `LANGUAGE_CODES`. The coverage test already
   iterates over every catalog, so a new one is held to the same completeness

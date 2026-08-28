@@ -382,9 +382,12 @@ Tk-dependent tests skip themselves automatically when no display is available.
   python tools/benchmark_ui.py
   ```
 
+  The Mini Vault works the same way and shares the cache: `CardPool` in
+  `ui/widgets.py` owns the reuse and the invalidation for both lists.
+
   Two consequences worth knowing: plain widgets do not follow the
-  appearance mode on their own, so the list is repainted when the theme or
-  language changes; and the list holds a cache, so anything that edits an
+  appearance mode on their own, so both lists are repainted when the theme
+  or language changes; and they hold a cache, so anything that edits an
   entry invalidates that entry's card.
 
 ---

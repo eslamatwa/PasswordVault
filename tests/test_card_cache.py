@@ -52,6 +52,31 @@ def _packed_cards(app):
             set(app._card_pool.values())]
 
 
+def _texts_widgets(widget, out=None):
+    """Every plain label under *widget*, mapped or not.
+
+    Unlike `_texts`, this is about the widgets themselves rather than what
+    is on screen — a stale colour is worth catching even on a card that
+    happens to be hidden.
+    """
+    out = [] if out is None else out
+    if isinstance(widget, tk.Label):
+        out.append(widget)
+    for child in widget.winfo_children():
+        _texts_widgets(child, out)
+    return out
+
+
+def _pool(app):
+    """A snapshot of the card cache as a plain dict.
+
+    `app._card_pool` is a CardPool, which reads like a mapping but is not
+    one — comparing it to a dict would always be false and quietly turn
+    these assertions into nothing.
+    """
+    return dict(app._card_pool.items())
+
+
 def _entry(app, title):
     for e in app.data["entries"]:
         if e["title"] == title:
@@ -63,17 +88,17 @@ class TestReuse:
     def test_a_second_refresh_keeps_the_same_widgets(self, app):
         app.refresh_entries()
         app.root.update()
-        first = dict(app._card_pool)
+        first = _pool(app)
         assert first, "no cards were cached"
 
         app.refresh_entries()
         app.root.update()
-        assert app._card_pool == first, "cards were rebuilt needlessly"
+        assert _pool(app) == first, "cards were rebuilt needlessly"
 
     def test_filtering_hides_rather_than_destroys(self, app):
         app.refresh_entries()
         app.root.update()
-        pooled = dict(app._card_pool)
+        pooled = _pool(app)
 
         app.search_var.set("Bank")
         app._refresh_from_search()
@@ -83,7 +108,7 @@ class TestReuse:
         assert "db01" not in _list_text(app)
         # The filtered-out card is kept, because the next keystroke may
         # well bring it back.
-        assert app._card_pool == pooled
+        assert _pool(app) == pooled
 
     def test_clearing_the_search_brings_them_back(self, app):
         app.search_var.set("Bank")
@@ -192,7 +217,7 @@ class TestRemoval:
         app.refresh_entries()
         app.root.update()
         assert "No passwords yet" in _list_text(app)
-        assert app._card_pool == {}
+        assert _pool(app) == {}
 
     def test_the_empty_state_is_cleared_when_entries_return(self, app):
         app.data["entries"] = []
@@ -237,13 +262,13 @@ class TestThemeAndLanguage:
         """Plain Tk widgets keep the colours they were built with."""
         app.refresh_entries()
         app.root.update()
-        before = dict(app._card_pool)
+        before = _pool(app)
         assert before
 
         app._apply_appearance("Light")
         app.root.update()
         try:
-            assert app._card_pool != before, \
+            assert _pool(app) != before, \
                 "cards survived a theme change with the old palette"
             assert app._card_pool, "the list was not rebuilt"
         finally:
@@ -256,6 +281,42 @@ class TestThemeAndLanguage:
         app.root.update()
         assert app._card_pool, "the list was not rebuilt in Arabic"
 
+    def test_the_mini_vault_repaints_too(self, app):
+        """It has its own pool, and its own chance to show stale colours.
+
+        Refreshing it on a theme change is not enough — the refresh reuses
+        cached cards, which is exactly what has to be thrown away.
+        """
+        from password_vault.theme import CARD_COLORS, resolve
+        from password_vault.ui.mini_vault import MiniVault
+
+        app.data["entries"][0]["color"] = "blue"
+        app.mini_vault = MiniVault(app)
+        app.root.update()
+        try:
+            for mode in ("Light", "Dark"):
+                app._apply_appearance(mode)
+                app.root.update()
+                expected = resolve(CARD_COLORS["blue"]["bg"])
+                cards = [w for w in app.mini_vault.list_frame
+                         .winfo_children()
+                         if not isinstance(w, tk.Label)]
+                assert cards, "the Mini Vault rendered no cards"
+                # Only the labels that sit on the card itself. The
+                # buttons carry their own fills by design, so demanding
+                # the card colour everywhere would fail on correct code.
+                body = [w for w in _texts_widgets(cards[0])
+                        if "@" in str(w.cget("text"))]
+                assert body, "no username label found on the card"
+                stale = [w.cget("bg") for w in body
+                         if w.cget("bg") != expected]
+                assert not stale, (
+                    f"a Mini Vault card kept {stale} instead of {expected}")
+        finally:
+            app.mini_vault.destroy()
+            app.mini_vault = None
+            app.root.update()
+
     def test_locking_drops_every_card(self, app):
         """Their parent is destroyed with the main frame."""
         app.refresh_entries()
@@ -264,7 +325,7 @@ class TestThemeAndLanguage:
 
         app._auto_lock()
         app.root.update()
-        assert app._card_pool == {}
+        assert _pool(app) == {}
         assert app._list_extras == []
 
 
@@ -288,7 +349,7 @@ class TestShowMore:
         app._visible_limit = 1
         app.refresh_entries()
         app.root.update()
-        first = dict(app._card_pool)
+        first = _pool(app)
 
         app._show_more_entries()
         app.root.update()

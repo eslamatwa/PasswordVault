@@ -59,7 +59,8 @@ from password_vault.ui.widgets import (
     row_frame, row_label, icon_button,
     tip, ios_group, ios_field, ios_combo, make_search_bar, safe_cfg,
     bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
-    ui_font, elide, filter_entries, dialog_header, button_row,
+    ui_font, elide, filter_entries, dialog_header, button_row, CardPool,
+    card_signature,
 )
 from password_vault.ui.mini_vault import MiniVault
 from password_vault.ui.floating import FloatingWidget
@@ -127,10 +128,10 @@ class PasswordVault:
         self._search_after_id = None
         self._visible_limit = ENTRIES_PAGE_SIZE
         # Entry cards, kept between refreshes and re-packed rather than
-        # rebuilt. The signature is what the card draws, so a stale one
-        # can be spotted when its entry is edited.
-        self._card_pool: dict = {}
-        self._card_signatures: dict = {}
+        # rebuilt. CardPool owns the invalidation; _card_signature says
+        # what counts as a change.
+        self._card_pool = CardPool(
+            self._card, card_signature, fill="x", pady=2, padx=8)
         # Children of the list that are not cards: the empty state and the
         # "Show more" footer. Those are rebuilt every time.
         self._list_extras: list = []
@@ -463,10 +464,9 @@ class PasswordVault:
         if self._main_frame and self._main_frame.winfo_exists():
             self._main_frame.destroy()
             self._main_frame = None
-        # Their parent is gone; holding the references would keep dead
-        # widgets alive and hand them back on the next unlock.
-        self._card_pool.clear()
-        self._card_signatures.clear()
+        # Their parent is gone with the main frame, so drop the
+        # references rather than reaching into destroyed widgets.
+        self._card_pool.forget()
         self._list_extras.clear()
         self.show_login()
 
@@ -880,7 +880,6 @@ class PasswordVault:
         # card belongs to a parent that is going away. Holding them would
         # hand back widgets whose parent no longer exists.
         self._card_pool.clear()
-        self._card_signatures.clear()
         self._list_extras.clear()
 
         self._main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -991,7 +990,7 @@ class PasswordVault:
         """
         ctk.set_appearance_mode(mode)
         # Cached cards hold the colours they were built with.
-        self._clear_card_pool()
+        self._card_pool.clear()
         if self._main_frame is not None and self._main_frame.winfo_exists():
             try:
                 self.refresh_categories()
@@ -1001,6 +1000,9 @@ class PasswordVault:
         if self.mini_vault is not None:
             try:
                 if self.mini_vault.winfo_exists():
+                    # Its cards are cached too, and hold the old palette.
+                    # Refreshing without clearing would re-show them.
+                    self.mini_vault._cards.clear()
                     self.mini_vault._refresh()
             except tk.TclError:
                 pass
@@ -1029,7 +1031,7 @@ class PasswordVault:
             self._main_frame.destroy()
             self._main_frame = None
         self._visible_limit = ENTRIES_PAGE_SIZE
-        self._clear_card_pool()
+        self._card_pool.clear()
         self._list_extras.clear()
         self.build_ui()
 
@@ -1515,43 +1517,6 @@ class PasswordVault:
                       window_title="Delete Category", size=(380, 190))
 
     # ─── Entries ─────────────────────────────────────────────
-    @staticmethod
-    def _card_signature(entry) -> tuple:
-        """Everything a card draws, so a stale one can be spotted.
-
-        A cached card is reused only while the entry still renders the
-        same. Anything the row shows belongs here — miss a field and an
-        edit to it would leave the old text on screen.
-        """
-        return (entry.get("title", ""), entry.get("username", ""),
-                entry.get("password", ""), entry.get("url", ""),
-                entry.get("category", ""), entry.get("notes", ""),
-                entry.get("color", "default"),
-                bool(entry.get("pinned", False)),
-                entry.get("modified_at") or entry.get("created_at"))
-
-    def _discard_cards(self, keep=None) -> None:
-        """Destroy pooled cards, except the ids in *keep*."""
-        for entry_id in [i for i in self._card_pool
-                         if keep is None or i not in keep]:
-            card = self._card_pool.pop(entry_id, None)
-            self._card_signatures.pop(entry_id, None)
-            if card is not None:
-                try:
-                    card.destroy()
-                except tk.TclError:
-                    pass
-
-    def _clear_card_pool(self) -> None:
-        """Drop every cached card.
-
-        Used when something outside an entry changes what a card looks
-        like — the appearance mode, or the language — since the cards are
-        plain Tk widgets that keep the colours and text they were built
-        with.
-        """
-        self._discard_cards()
-
     def refresh_entries(self):
         """Show the entries matching the current category and search.
 
@@ -1578,17 +1543,9 @@ class PasswordVault:
             self.data["entries"], self.current_category, search)
         entries = sort_entries_pinned_first(entries)
 
-        # Anything no longer in the vault at all can go; a card for an
-        # entry that is merely filtered out is kept, because the next
-        # keystroke may well bring it back.
         live = {e.get("id") for e in self.data["entries"] if e.get("id")}
-        self._discard_cards(keep=live)
-
-        for card in self._card_pool.values():
-            try:
-                card.pack_forget()
-            except tk.TclError:
-                pass
+        self._card_pool.keep_only(live)
+        self._card_pool.hide_all()
 
         if not entries:
             ef = ctk.CTkFrame(self.entries_panel, fg_color="transparent")
@@ -1606,40 +1563,10 @@ class PasswordVault:
             return
 
         for entry in entries[:self._visible_limit]:
-            self._show_card(entry)
+            self._card_pool.show(entry, entry.get("id"))
         hidden = len(entries) - self._visible_limit
         if hidden > 0:
             self._add_show_more(hidden)
-
-    def _show_card(self, entry) -> None:
-        """Pack the card for *entry*, building or rebuilding if needed."""
-        entry_id = entry.get("id")
-        signature = self._card_signature(entry)
-        card = self._card_pool.get(entry_id) if entry_id else None
-
-        if card is not None:
-            try:
-                stale = (self._card_signatures.get(entry_id) != signature
-                         or not card.winfo_exists())
-            except tk.TclError:
-                stale = True
-            if stale:
-                try:
-                    card.destroy()
-                except tk.TclError:
-                    pass
-                card = None
-
-        if card is None:
-            card = self._card(entry)
-            if entry_id:
-                self._card_pool[entry_id] = card
-                self._card_signatures[entry_id] = signature
-
-        try:
-            card.pack(fill="x", pady=2, padx=8)
-        except tk.TclError:
-            pass
 
     def _add_show_more(self, hidden: int):
         """Footer that extends the render window by one more page."""

@@ -289,6 +289,152 @@ def safe_label_cfg(label, text, bg) -> None:
         pass
 
 
+# ─── Card Pool ───────────────────────────────────────────────
+def card_signature(entry) -> tuple:
+    """Everything a card draws, so a stale one can be spotted.
+
+    Both lists render the same fields, so they share this. Miss one and an
+    edit to it would leave the old text on screen — which is the only way
+    a cache like this can go wrong, so it is deliberately generous: the
+    password is here even though the card shows a fixed-width mask,
+    because the card also holds the real value for the reveal button.
+    """
+    return (entry.get("title", ""), entry.get("username", ""),
+            entry.get("password", ""), entry.get("url", ""),
+            entry.get("category", ""), entry.get("notes", ""),
+            entry.get("color", "default"),
+            bool(entry.get("pinned", False)),
+            entry.get("modified_at") or entry.get("created_at"))
+
+
+
+class CardPool:
+    """Row widgets kept between refreshes and re-packed, not rebuilt.
+
+    Destroying and rebuilding a list of cards costs seconds; hiding and
+    showing the same widgets costs a fraction of that, because
+    ``pack_forget`` unmaps a widget without tearing it down. The catch is
+    that this is a cache, and the failure mode of a cache is showing what
+    is no longer true — so a card is reused only while its entry still
+    renders identically, which *signature* decides.
+
+    Both lists in the app use one of these. The logic lives here rather
+    than in each of them because a second copy is a second place for the
+    invalidation rules to drift.
+    """
+
+    def __init__(self, build, signature, **pack_options):
+        """*build* makes a card for an entry and returns it *unpacked*.
+
+        *signature* returns everything that card draws, so a change to any
+        of it can be spotted. *pack_options* are how a visible card is
+        packed, and are applied in the order cards are shown.
+        """
+        self._build = build
+        self._signature = signature
+        self._pack_options = pack_options
+        self._cards: dict = {}
+        self._signatures: dict = {}
+
+    # A read-only mapping of entry id -> card. Enough for a caller — or a
+    # test — to ask what is cached without being able to corrupt it.
+    def __len__(self) -> int:
+        return len(self._cards)
+
+    def __contains__(self, entry_id) -> bool:
+        return entry_id in self._cards
+
+    def __iter__(self):
+        return iter(self._cards)
+
+    def __getitem__(self, entry_id):
+        return self._cards[entry_id]
+
+    def keys(self):
+        return self._cards.keys()
+
+    def values(self):
+        return self._cards.values()
+
+    def items(self):
+        return self._cards.items()
+
+    def get(self, entry_id):
+        return self._cards.get(entry_id)
+
+    def hide_all(self) -> None:
+        """Unmap every card, ready for the matching ones to be shown."""
+        for card in self._cards.values():
+            try:
+                card.pack_forget()
+            except tk.TclError:
+                pass
+
+    def show(self, entry, entry_id):
+        """Pack the card for *entry*, building or rebuilding as needed."""
+        card = self._cards.get(entry_id) if entry_id else None
+        signature = self._signature(entry)
+
+        if card is not None:
+            try:
+                stale = (self._signatures.get(entry_id) != signature
+                         or not card.winfo_exists())
+            except tk.TclError:
+                stale = True
+            if stale:
+                self._destroy(entry_id)
+                card = None
+
+        if card is None:
+            card = self._build(entry)
+            if entry_id:
+                self._cards[entry_id] = card
+                self._signatures[entry_id] = signature
+
+        try:
+            card.pack(**self._pack_options)
+        except tk.TclError:
+            pass
+        return card
+
+    def keep_only(self, entry_ids) -> None:
+        """Destroy cards for entries that are gone from the data.
+
+        A card for an entry that is merely filtered out is kept — the next
+        keystroke may well bring it back.
+        """
+        for entry_id in [i for i in self._cards if i not in entry_ids]:
+            self._destroy(entry_id)
+
+    def clear(self) -> None:
+        """Drop every card.
+
+        Used when something outside the entries changes how a card looks —
+        the appearance mode or the language — because these are plain Tk
+        widgets that keep the colours and text they were built with.
+        """
+        for entry_id in list(self._cards):
+            self._destroy(entry_id)
+
+    def forget(self) -> None:
+        """Drop the references without destroying anything.
+
+        For when the parent has already been destroyed and the widgets
+        went with it; touching them would only raise.
+        """
+        self._cards.clear()
+        self._signatures.clear()
+
+    def _destroy(self, entry_id) -> None:
+        card = self._cards.pop(entry_id, None)
+        self._signatures.pop(entry_id, None)
+        if card is not None:
+            try:
+                card.destroy()
+            except tk.TclError:
+                pass
+
+
 # ─── Dialog Chrome ───────────────────────────────────────────
 def dialog_header(parent, title: str, *, icon: str | None = None,
                   subtitle: str | None = None, size: int = 16,
