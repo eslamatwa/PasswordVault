@@ -171,12 +171,29 @@ def import_json(filepath: str) -> list[dict]:
     """
     from .import_json import load
 
+    return _complete_rows(load(filepath))
+
+
+def import_1pux(filepath: str) -> list[dict]:
+    """Import a 1Password 1PUX archive.
+
+    Like the Bitwarden JSON reader, this is not a column map: the format
+    nests accounts, vaults, typed items and custom sections inside a zip.
+    :mod:`password_vault.import_1pux` does the reading; this only completes
+    the rows into full entries.
+    """
+    from .import_1pux import load
+
+    return _complete_rows(load(filepath))
+
+
+def _complete_rows(rows) -> list[dict]:
+    """Turn parsed rows into entries, applying the row cap."""
     now_iso = datetime.datetime.now().isoformat()
     entries = []
-    for row in load(filepath):
+    for row in rows:
         if len(entries) >= MAX_IMPORT_ROWS:
-            log.warning("JSON import truncated at %d rows.",
-                        MAX_IMPORT_ROWS)
+            log.warning("Import truncated at %d rows.", MAX_IMPORT_ROWS)
             break
         if not (row.get("title") or row.get("password")
                 or row.get("notes")):

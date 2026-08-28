@@ -18,8 +18,10 @@ a = Analysis(
         'password_vault.crypto',
         'password_vault.export_import',
         'password_vault.i18n',
-        # Imported inside export_import.import_json(), so static analysis
-        # does not see it — the same reason the dialogs are listed.
+        # Imported inside export_import's reader functions, so static
+        # analysis does not see them — the same reason the dialogs are
+        # listed.
+        'password_vault.import_1pux',
         'password_vault.import_json',
         'password_vault.import_profiles',
         'password_vault.instance_lock',

@@ -113,6 +113,10 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **The Mini Vault's cards are plain Tk widgets too.** Same reasoning as
+  the main list, smaller surface: 7 plain widgets a card instead of a
+  CustomTkinter row, colours verified in both modes, and hover, copy and
+  the right-click menu all still working.
 - **The entry list is 36x faster.** A repaint used to cost about a quarter
   of a second per row, on the surface that repaints on startup, on every
   settled search keystroke, on a category switch, and after every add,
@@ -221,10 +225,19 @@ python -m pyflakes main.py password_vault tests
   and `PasswordVault.exe --self-test` resolves all 19 lazy modules in the
   built exe. `tests/test_packaging.py` keeps that list and the spec's from
   drifting apart.
-- **Bitwarden JSON import.** A column map cannot express folders joined by
-  id, several URIs per item, per-item custom fields, or typed items beyond
-  logins, so the JSON export is read directly. Secure notes, cards and
-  identities import as notes-only entries with their type recorded.
+- **Bitwarden JSON and 1Password 1PUX import.** A column map cannot
+  express folders and vaults joined by id, several URIs per item, per-item
+  custom fields and sections, or typed items beyond logins, so both are
+  read directly. Secure notes, cards and identities import as notes-only
+  entries with their type recorded, because only a login has a password
+  and skipping the rest would discard most of a vault in silence.
+
+  1PUX is a zip, which raised the question this file had been holding open:
+  where do attachments go, in an app that stores no files? They are named
+  in the entry's notes and located — "still in the .1pux file" — rather
+  than extracted. Writing decrypted documents onto disk beside an encrypted
+  vault would be the opposite of the point, and dropping them without a
+  word is what the rest of the importer exists to avoid.
 - The build spec lists the lazily imported dialog modules and
   `instance_lock` as hidden imports; the README points at the spec instead of
   a hand-written PyInstaller command that would miss them.
@@ -320,13 +333,10 @@ later is invisible in English, so the check has to be static.
 Nothing at this size is outstanding. Rendering the entry list was the last
 one and is in *Done* above. The next candidates, none started:
 
-- **The Mini Vault's cards** are still CustomTkinter throughout, so they
-  carry the cost the main list just shed. Same treatment, smaller surface,
-  and the helpers are already there.
-- **1Password's 1PUX export** — a zip carrying attachments and item types
-  beyond logins. Bitwarden's JSON is now read directly; 1PUX needs archive
-  handling and a decision about where attachments would even go, since this
-  app stores none.
+- **Reuse in the Mini Vault.** Its cards are plain Tk widgets now, but it
+  still rebuilds them on every refresh. The main list's card pool would
+  apply directly; doing it well means extracting that logic rather than
+  writing it twice, which is why it is not done yet.
 - **A third interface language** is now purely a data change: add a catalog
   to `CATALOG` and a code to `LANGUAGE_CODES`. The coverage test already
   iterates over every catalog, so a new one is held to the same completeness

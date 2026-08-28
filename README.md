@@ -130,6 +130,7 @@ Exports from these applications are read directly — no reformatting needed:
 | KeePass | `Account, Login Name, Password, Web Site, Comments, Group` |
 | Firefox | `url, username, password, httpRealm, …` |
 | Bitwarden **JSON** | the full export, not a column map — see below |
+| 1Password **.1pux** | the full archive, not a column map — see below |
 
 The format is detected from the header row and shown in the import dialog,
 with a dropdown to override it if the guess is wrong. Folders, groupings and
@@ -140,13 +141,21 @@ dedicated home in this app, so it is appended to the entry's notes under its
 original name rather than discarded. Any column that cannot be carried at all
 is listed in the dialog *before* you import.
 
-**Bitwarden JSON** is read directly rather than through a column map, because
-a CSV cannot express what that format holds: folders joined by id, several
-URIs per item, per-item custom fields, and typed items beyond logins. Secure
-notes, cards and identities are imported as notes-only entries with their
-type recorded — skipping them silently would be the worst outcome. A
-password-protected Bitwarden export cannot be read; the dialog says so and
-tells you to export again without encryption.
+**Bitwarden JSON** and **1Password .1pux** are read directly rather than
+through a column map, because a CSV cannot express what those formats hold:
+folders and vaults joined by id, several URIs per item, per-item custom
+fields and sections, and typed items beyond logins. Secure notes, cards and
+identities are imported as notes-only entries with their type recorded —
+skipping them silently would be the worst outcome.
+
+Two things worth knowing:
+
+- A **password-protected Bitwarden export** cannot be read; the dialog says
+  so and tells you to export again without encryption.
+- **1PUX attachments are named, not extracted.** This app stores no files,
+  and writing decrypted documents onto disk beside an encrypted vault would
+  defeat the point. The entry's notes list what was attached and say the
+  files are still inside the `.1pux`, so nothing disappears quietly.
 
 ### ℹ️ About Dialog
 - Version info, developer name, encryption details

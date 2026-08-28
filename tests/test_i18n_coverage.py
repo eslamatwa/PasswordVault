@@ -40,7 +40,7 @@ EXEMPT = {
     "Segoe UI", "Consolas", "https://example.com",
     # Product names stay as they are written, in every language. The CSV
     # profile labels reach the UI the same way, through Profile.label.
-    "Bitwarden JSON",
+    "Bitwarden JSON", "1Password (.1pux)",
 }
 
 

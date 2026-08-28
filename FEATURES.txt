@@ -163,9 +163,12 @@ IMPORT & EXPORT
   * Import from other password managers — Chrome/Edge, Bitwarden, LastPass,
     1Password, KeePass and Firefox. The format is detected from the header
     row and shown in the dialog, with a dropdown to override it
-  * Bitwarden JSON — read directly rather than as columns, so folders,
-    multiple URIs per item, custom fields, and secure notes/cards/identities
-    all survive the import
+  * Bitwarden JSON and 1Password .1pux — read directly rather than as
+    columns, so vaults, folders, multiple URIs per item, custom fields, and
+    secure notes/cards/identities all survive the import
+  * Attachments in a .1pux are named in the entry's notes, not extracted:
+    this app stores no files, and writing decrypted documents beside an
+    encrypted vault would defeat the point
   * Nothing is dropped in silence — TOTP secrets and custom fields are kept
     in the entry's notes, and any column with no home is named in the dialog
     before you import

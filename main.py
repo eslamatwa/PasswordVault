@@ -2946,6 +2946,7 @@ LAZY_MODULES = (
     "password_vault.crypto",
     "password_vault.export_import",
     "password_vault.i18n",
+    "password_vault.import_1pux",
     "password_vault.import_json",
     "password_vault.import_profiles",
     "password_vault.instance_lock",

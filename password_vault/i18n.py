@@ -435,12 +435,12 @@ ARABIC: dict[str, str] = {
     "Excel export needs the openpyxl package":
         "تصدير Excel يحتاج حزمة openpyxl",
     "Could not write the file: {error}": "تعذّرت كتابة الملف: {error}",
-    "Select a CSV, Excel or JSON file to import.\nExports from Chrome, "
-    "Bitwarden, LastPass, 1Password,\nKeePass and Firefox are recognised "
-    "too.":
-        "اختر ملف CSV أو Excel أو JSON للاستيراد.\nملفات Chrome و "
-        "Bitwarden و LastPass و 1Password\nو KeePass و Firefox مدعومة "
-        "أيضاً.",
+    "Select a file to import: CSV, Excel, a Bitwarden\n.json, or a "
+    "1Password .1pux. Chrome, LastPass,\nKeePass and Firefox exports are "
+    "read too.":
+        "اختر ملفاً للاستيراد: CSV أو Excel أو ملف Bitwarden\nبصيغة .json "
+        "أو ملف 1Password بصيغة .1pux. وملفات\nChrome و LastPass و KeePass "
+        "و Firefox تُقرأ أيضاً.",
     "Format": "الصيغة",
     "Auto-detect": "كشف تلقائي",
     "Which application this file came from. Auto-detect reads the header "

@@ -15,6 +15,7 @@ from ..theme import (
 )
 from ..security import password_age_text
 from .widgets import (
+    row_frame, row_label, icon_button,
     make_search_bar, tip, bind_right_click_recursive,
     add_color_strip, sort_entries_pinned_first, ui_font, elide,
     filter_entries,
@@ -228,35 +229,39 @@ class MiniVault(ctk.CTkToplevel):
         self.app._copy_to_clipboard(text)
 
     def _mini_card(self, entry):
+        """One row of the Mini Vault.
+
+        Plain Tk widgets, for the same reason the main list uses them: a
+        CustomTkinter widget draws itself onto its own canvas, which costs
+        9x a tk.Label for text and 35-50x for a button or frame. The card
+        keeps its CTkFrame, because the rounded tint is the visible part.
+        """
         color_key = entry.get("color", "default")
         cc = CARD_COLORS.get(color_key, CARD_COLORS["default"])
+        bg = cc["bg"]
 
-        card = ctk.CTkFrame(self.list_frame, fg_color=cc["bg"],
-                              corner_radius=10)
+        card = ctk.CTkFrame(self.list_frame, fg_color=bg, corner_radius=10)
         card.pack(fill="x", pady=3, padx=2)
 
         # Right-click context menu binding (applied recursively after build)
         def _on_right_click(event, e=entry):
             self._show_mini_context_menu(event, e)
 
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=10, pady=7)
-
+        inner = row_frame(card, bg, fill="x", padx=10, pady=7)
         add_color_strip(card, cc, width=4, relheight=0.7)
 
         # Title row
-        title_row = ctk.CTkFrame(inner, fg_color="transparent")
-        title_row.pack(fill="x")
+        title_row = row_frame(inner, bg, fill="x")
 
         pin_icon = "📌 " if entry.get("pinned") else ""
         emoji = cat_emoji(entry.get("category", ""))
         full_title = entry.get("title", "")
-        title_lbl = ctk.CTkLabel(
+        title_lbl = row_label(
             title_row,
-            text=f"{pin_icon}{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
-            font=ui_font(12, "bold"), text_color=TEXT_PRI,
-            anchor=anchor_start())
-        title_lbl.pack(side=side_start(), fill="x", expand=True)
+            f"{pin_icon}{emoji}  {elide(full_title, TITLE_MAX_CHARS)}",
+            bg, TEXT_PRI, font=("Segoe UI", 10, "bold"),
+            side=side_start(), fill="x", expand=True)
+        title_lbl.configure(anchor=anchor_start())
         if len(full_title) > TITLE_MAX_CHARS:
             tip(title_lbl, full_title)
 
@@ -264,62 +269,51 @@ class MiniVault(ctk.CTkToplevel):
         age_t, age_c = password_age_text(
             entry.get("modified_at") or entry.get("created_at"))
         if age_t:
-            ctk.CTkLabel(title_row, text=age_t,
-                          font=ui_font(9, family=None),
-                          text_color=age_c).pack(side=side_end())
+            row_label(title_row, age_t, bg, age_c,
+                      font=("Segoe UI", 8), side=side_end())
 
-        if entry.get("username"):
-            ctk.CTkLabel(inner, text=entry.get("username", ""),
-                          font=ui_font(10),
-                          text_color=TEXT_SEC,
-                          anchor=anchor_start()).pack(
-                fill="x", pady=(1, 4))
+        username = entry.get("username", "")
+        if username:
+            row_label(inner, username, bg, TEXT_SEC,
+                      font=("Segoe UI", 8),
+                      fill="x", pady=(1, 4)).configure(
+                          anchor=anchor_start())
         else:
-            ctk.CTkFrame(inner, height=4,
-                          fg_color="transparent").pack()
+            row_frame(inner, bg, pady=2)
 
-        btn_row = ctk.CTkFrame(inner, fg_color="transparent")
-        btn_row.pack(fill="x")
+        btn_row = row_frame(inner, bg, fill="x")
 
-        cp_user = ctk.CTkButton(
-            btn_row, text=t("📋 User"), height=24, width=70,
-            font=ui_font(10),
-            fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
-            text_color=TEXT_PRI,
-            command=lambda: self._mini_copy(entry.get("username", ""),
-                                            cp_user))
-        cp_user.pack(side=side_start(), padx=pad(0, 4))
+        cp_user = icon_button(
+            btn_row, t("📋 User"), None, bg=BG_TERT, hover=TEXT_QUAT,
+            fg=TEXT_PRI, font=("Segoe UI", 8),
+            side=side_start(), padx=pad(0, 4))
+        cp_user.bind("<Button-1>",
+                     lambda _e: self._mini_copy(username, cp_user),
+                     add="+")
         tip(cp_user, t("Copy username to clipboard"))
 
-        cp_pass = ctk.CTkButton(
-            btn_row, text=t("🔑 Pass"), height=24, width=70,
-            font=ui_font(10),
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=6,
-            text_color=TEXT_ON_ACCENT,
-            command=lambda: self._mini_copy(entry.get("password", ""),
-                                            cp_pass))
-        cp_pass.pack(side=side_start(), padx=pad(0, 4))
+        password = entry.get("password", "")
+        cp_pass = icon_button(
+            btn_row, t("🔑 Pass"), None, bg=ACCENT, hover=ACCENT_HOVER,
+            fg=TEXT_ON_ACCENT, font=("Segoe UI", 8),
+            side=side_start(), padx=pad(0, 4))
+        cp_pass.bind("<Button-1>",
+                     lambda _e: self._mini_copy(password, cp_pass),
+                     add="+")
         tip(cp_pass, t("Copy password to clipboard"))
 
         # URL button (only if URL exists)
         url = entry.get("url", "")
         if url:
-            url_btn = ctk.CTkButton(
-                btn_row, text="🌐", height=24, width=30,
-                font=ui_font(11, family=None),
-                fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
-                text_color=TEAL,
-                command=lambda u=url: self.app._open_url(u))
-            url_btn.pack(side=side_start(), padx=pad(0, 4))
+            url_btn = icon_button(
+                btn_row, "🌐", lambda u=url: self.app._open_url(u),
+                bg=BG_TERT, hover=TEXT_QUAT, fg=TEAL,
+                side=side_start(), padx=pad(0, 4))
             tip(url_btn, t("Open {url}", url=url))
 
-        edit_btn = ctk.CTkButton(
-            btn_row, text="✏️", height=24, width=36,
-            font=ui_font(11),
-            fg_color=BG_TERT, hover_color=TEXT_QUAT, corner_radius=6,
-            text_color=TEXT_SEC,
-            command=lambda: self._mini_edit(entry))
-        edit_btn.pack(side=side_end())
+        edit_btn = icon_button(
+            btn_row, "✏️", lambda: self._mini_edit(entry),
+            bg=BG_TERT, hover=TEXT_QUAT, fg=TEXT_SEC, side=side_end())
         tip(edit_btn, t("Edit this entry"))
 
         # Apply right-click binding to card + ALL children recursively.
