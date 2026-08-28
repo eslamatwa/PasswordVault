@@ -113,6 +113,36 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **Several SSH sessions at once.** Ten servers meant ten trips through
+  the same dialog, re-picking the same client each time. The new dialog
+  lists everything the right-click menu would offer SSH for — the same
+  `_looks_remote` test, with a test asserting the two agree — and opens
+  the ticked ones.
+
+  The hard part was the password, not the launching. One clipboard cannot
+  hold ten, and rotating them on a timer would mean the clipboard holding
+  whichever secret happened to be current when the user pressed Ctrl+V.
+  So the batch stages nothing. A panel stays up with one button per
+  server: the user clicks the row for the tab they are in, and that one
+  password goes over under the usual auto-clear. One secret at a time,
+  and it is the one that was asked for. The panel is destroyed by the
+  auto-lock like any other dialog, because it can reach every password in
+  the batch.
+
+  Launches are chained through `root.after`, not looped: `Popen` returns
+  immediately, so a loop fires them all into one instant, which makes a
+  cold-starting MobaXterm drop tabs. A host or username carrying a shell
+  character is shown with the reason and left unpickable rather than
+  hidden — an entry that offers SSH from its own menu and is missing here
+  would read as a bug in the list — and never rewritten, which is the
+  rule the single-session flow already follows.
+
+  Writing the tests found a real defect: the chain outlived whatever
+  started it, so a batch kept opening sessions after the vault
+  auto-locked. It surfaced as launches from one test appearing in the
+  next one's results. `cancel_ssh_batch` now runs on lock, on quit, and
+  before a new batch starts.
+
 - **The test suite stopped borrowing the developer's machine.** It drives
   a real Tk application, so a run put a window and a Toplevel per dialog
   on screen for four minutes, appearing, taking focus and vanishing. It
@@ -401,10 +431,11 @@ later is invisible in English, so the check has to be static.
 Nothing at this size is outstanding. Rendering the entry list was the last
 one and is in *Done* above. The next candidates, none started:
 
-- **A third interface language** is now purely a data change: add a catalog
-  to `CATALOG` and a code to `LANGUAGE_CODES`. The coverage test already
-  iterates over every catalog, so a new one is held to the same completeness
-  as Arabic from the moment it is added.
+- **A third interface language.** Considered and not wanted: English and
+  Arabic cover the users this is built for. The machinery is in place if
+  that changes — a catalog in `CATALOG`, a code in `LANGUAGE_CODES`, and
+  the coverage test holds any new one to the same completeness as Arabic
+  from the moment it is added.
 
 ---
 

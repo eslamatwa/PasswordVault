@@ -91,6 +91,9 @@ PASSWORD_MASK = "●" * 10
 # Card titles longer than this are elided; the full text moves to a tooltip.
 TITLE_MAX_CHARS = 38
 
+# Gap between launches when several SSH sessions are opened at once.
+BULK_SSH_STAGGER_MS = 400
+
 # How long the password stays on the clipboard for an SSH/RDP paste.
 # A flat 10s used to expire before MobaXterm had finished starting, so the
 # client asked for a password that was no longer there to paste.
@@ -120,6 +123,8 @@ class PasswordVault:
         self._failed_streak = 0  # cumulative; doesn't reset on each lockout
         self._lockout_until = 0
         self._idle_timer = None
+        self._session_panel = None
+        self._batch_timer = None
         self._last_idle_reset = 0.0
         self._main_frame = None
         self._clipboard_timer = None
@@ -460,6 +465,8 @@ class PasswordVault:
         self.key = None
         self.data = None
         self._idle_timer = None
+        self._session_panel = None
+        self.cancel_ssh_batch()
         self._unbind_shortcuts()
         if self._main_frame and self._main_frame.winfo_exists():
             self._main_frame.destroy()
@@ -1115,6 +1122,8 @@ class PasswordVault:
         menu.add_command(label=t("🔑  Change Master Password"),
                           command=self.show_change_password_dialog)
         menu.add_separator()
+        menu.add_command(label=t("🖥️  Open Multiple SSH Sessions …"),
+                         command=self.show_bulk_ssh_dialog)
         menu.add_command(label=t("🛡️  Security Dashboard"),
                           command=self.show_security_dashboard)
         menu.add_separator()
@@ -2222,7 +2231,8 @@ class PasswordVault:
         cmd.append(host)
         return ["cmd", "/k"] + cmd
 
-    def _stage_password_for_paste(self, entry) -> None:
+    def _stage_password_for_paste(self, entry, *,
+                                  button=None) -> None:
         """Put the entry's password on the clipboard to paste into a client.
 
         The window used to be a flat 10 seconds, which was shorter than
@@ -2237,7 +2247,7 @@ class PasswordVault:
         """
         configured = self.settings.get("clipboard_clear_seconds", 30)
         window = max(REMOTE_PASTE_SECONDS, configured)
-        self._copy_to_clipboard(entry.get("password", ""),
+        self._copy_to_clipboard(entry.get("password", ""), btn=button,
                                 force_clear_seconds=window)
 
     def _launch_ssh(self, client_path, client_name, host, user, port, title):
@@ -2254,6 +2264,64 @@ class PasswordVault:
             log.warning("Failed to launch SSH client %s: %s",
                         client_name, exc)
             self._alert(t("Could not start the session"), str(exc))
+
+    def launch_ssh_batch(self, targets, client_name, client_path) -> None:
+        """Open a session for each of *targets*, one every few hundred ms.
+
+        Not a loop: `subprocess.Popen` returns immediately, so a loop
+        would fire ten launches into the same instant. A cold-starting
+        MobaXterm drops tabs when that happens, and the machine gets a
+        burst of processes for no gain -- nobody reads ten terminals at
+        once. Chaining through `root.after` also keeps the UI responsive
+        while they come up, which a sleep between launches would not.
+
+        Nothing is put on the clipboard here. One clipboard cannot hold
+        ten passwords, and cycling them on a timer would mean whichever
+        secret happened to be current when the user pressed Ctrl+V. The
+        panel that opens afterwards copies one on request instead.
+        """
+        if not targets:
+            return
+        remaining = list(targets)
+        log.info("Opening %d SSH sessions with %s.",
+                 len(remaining), client_name)
+
+        def step():
+            # A batch takes seconds to play out, and anything can happen
+            # in them: the vault auto-locks, or the user quits. Both leave
+            # the queued callbacks alive, and they would go on opening
+            # sessions for a vault that is no longer unlocked.
+            if not remaining or self.key is None:
+                self._batch_timer = None
+                return
+            target = remaining.pop(0)
+            entry = target["entry"]
+            self._launch_ssh(client_path, client_name, target["host"],
+                             target["user"], target["port"],
+                             entry.get("title", ""))
+            if remaining:
+                self._batch_timer = self.root.after(
+                    BULK_SSH_STAGGER_MS, step)
+            else:
+                self._batch_timer = None
+
+        self.cancel_ssh_batch()
+        step()
+        from password_vault.ui.dialogs import bulk_ssh
+        self._session_panel = bulk_ssh.show_password_panel(self, targets)
+
+    def cancel_ssh_batch(self) -> None:
+        """Drop any queued launches from a batch still playing out."""
+        if self._batch_timer:
+            try:
+                self.root.after_cancel(self._batch_timer)
+            except (tk.TclError, ValueError):
+                pass
+            self._batch_timer = None
+
+    def show_bulk_ssh_dialog(self) -> None:
+        from password_vault.ui.dialogs import bulk_ssh
+        bulk_ssh.show(self)
 
     # ─── Password Generator Dialog ───────────────────────────
     def _show_generator(self, target_entry):
@@ -2661,6 +2729,7 @@ class PasswordVault:
                 self.root.after_cancel(self._idle_timer)
         except tk.TclError:
             pass
+        self.cancel_ssh_batch()
         if self.mini_vault:
             try:
                 self.mini_vault.destroy()
@@ -2892,6 +2961,7 @@ LAZY_MODULES = (
     "password_vault.ui.widgets",
     "password_vault.ui.dialogs.about",
     "password_vault.ui.dialogs.backup",
+    "password_vault.ui.dialogs.bulk_ssh",
     "password_vault.ui.dialogs.change_password",
     "password_vault.ui.dialogs.data_io",
     "password_vault.ui.dialogs.generator",

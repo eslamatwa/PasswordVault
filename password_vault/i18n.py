@@ -251,6 +251,39 @@ ARABIC: dict[str, str] = {
     "⚙️  Settings": "⚙️  الإعدادات",
     "🔑  Change Master Password": "🔑  تغيير كلمة المرور الرئيسية",
     "🛡️  Security Dashboard": "🛡️  لوحة الأمان",
+
+    # ── Opening several SSH sessions at once ──
+    "🖥️  Open Multiple SSH Sessions …": "🖥️  فتح عدة جلسات SSH …",
+    "🖥️  Open Multiple SSH Sessions": "🖥️  فتح عدة جلسات SSH",
+    "Open Multiple SSH Sessions": "فتح عدة جلسات SSH",
+    "🖥️  Open sessions": "🖥️  افتح الجلسات",
+    "🖥️  Open {n} sessions": "🖥️  افتح {n} جلسة",
+    "Open {n} SSH sessions?": "تفتح {n} جلسة SSH؟",
+    "This starts {n} separate connections at once.":
+        "ده هيبدأ {n} اتصال منفصل في وقت واحد.",
+    "Open them": "افتحهم",
+    "{chosen} of {total} selected": "تم اختيار {chosen} من {total}",
+    "Select all": "اختيار الكل",
+    "Select none": "إلغاء الاختيار",
+    "⚠️ Nothing selected": "⚠️ لم يتم اختيار أي شيء",
+    "no host or IP": "لا يوجد مضيف أو عنوان IP",
+    "Start a session for every ticked server":
+        "بدء جلسة لكل خادم محدَّد",
+    "No entries look like a server.\n\nAn entry qualifies when its "
+    "category is a server one, or its address is a bare host, an IP, or "
+    "an ssh:// address.":
+        "لا يوجد أي مدخل يبدو كخادم.\n\nيُقبل المدخل عندما يكون تصنيفه "
+        "من تصنيفات الخوادم، أو يكون عنوانه اسم مضيف مجرّد أو عنوان IP "
+        "أو عنوان ssh://.",
+    "💡 Passwords are not copied automatically — a panel opens with one "
+    "button per server":
+        "💡 كلمات السر لا تُنسخ تلقائياً — تفتح لوحة فيها زر لكل خادم",
+    "🔑  Session Passwords": "🔑  كلمات سر الجلسات",
+    "Session Passwords": "كلمات سر الجلسات",
+    "Click the server you are pasting into. One password goes to the "
+    "clipboard at a time, and clears as usual.":
+        "اضغط على الخادم الذي تلصق فيه. كلمة سر واحدة تذهب إلى الحافظة "
+        "في كل مرة، وتُمسح كالمعتاد.",
     "📤  Export Data  (Ctrl+E)": "📤  تصدير البيانات  (Ctrl+E)",
     "📥  Import Data  (Ctrl+I)": "📥  استيراد البيانات  (Ctrl+I)",
     "🛟  Encrypted Backup …": "🛟  نسخة احتياطية مشفّرة …",

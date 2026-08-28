@@ -37,6 +37,7 @@ a = Analysis(
         'password_vault.ui.dialogs',
         'password_vault.ui.dialogs.about',
         'password_vault.ui.dialogs.backup',
+        'password_vault.ui.dialogs.bulk_ssh',
         'password_vault.ui.dialogs.change_password',
         'password_vault.ui.dialogs.data_io',
         'password_vault.ui.dialogs.generator',
