@@ -113,6 +113,64 @@ python -m pyflakes main.py password_vault tests
   Vault cannot disagree about what a query matches.
 
 ### Interface
+- **The test suite stopped borrowing the developer's machine.** It drives
+  a real Tk application, so a run put a window and a Toplevel per dialog
+  on screen for four minutes, appearing, taking focus and vanishing. It
+  was reported as the app opening and closing on its own, which is a fair
+  reading of what it looks like — the windows are real, they are just not
+  the user's. They are now mapped at +30000+30000 rather than hidden,
+  because other tests ask whether a card or a dialog is actually visible
+  and hiding them would make those tests pass on nothing. `lift`,
+  `tkraise` and `focus_force` are no-ops for the run, and `-topmost` is
+  ignored; stealing the keyboard is worse than merely being seen.
+
+  Rewriting the position in `geometry()` was not enough on its own: a
+  Toplevel that never asks for a position gets one from the window
+  manager, which put these at the top-left of the display. Windows are
+  moved at construction too.
+
+- **And it stopped writing to the real log.** `password_vault/__init__.py`
+  attaches a rotating handler to `%APPDATA%/PasswordVault/vault.log` when
+  the package is imported, so the suite had been appending thousands of
+  lines to the log belonging to the installed copy — and rotation then
+  discarded the genuine history. That log is the only record of anything
+  a user reports, so filling it with test output destroys the evidence
+  exactly when it is needed. `conftest` now redirects `APPDATA` at import
+  time, which is the only point early enough to beat the handler, and
+  fails loudly if anything gets in ahead of it.
+
+  What the app logs gained along the way: a start line with the pid and
+  argv, the window transitions at INFO, and `log.exception` around the
+  main loop, since a windowed build has no console and a crash otherwise
+  left nothing at all behind.
+
+- **The small buttons kept their rounded corners.** Moving the cards to
+  plain Tk cost the icon buttons their corner radius, which was the one
+  visible thing the speed was paid for. Three ways to get it back were
+  measured per button: a CTkButton 6.00 ms, a CTkCanvas driven by
+  CustomTkinter's own DrawEngine 4.03 ms, and a `tk.Label` wearing a
+  cached pill image 0.48 ms against a 0.42 ms square baseline. The last
+  one costs 15% of a plain label rather than 14x it, so that is what
+  ships; a 20-entry repaint is unchanged at ~355 ms.
+
+  The pill is a `tk.PhotoImage` drawn once per (size, colour) pair, with
+  the corners antialiased in Python. Tk will not antialias a canvas
+  polygon and Pillow is not a dependency here — adding one to round six
+  24px buttons would be a poor trade and would grow the one-file exe.
+  Because a Tk image has no alpha, the colour behind the corners is baked
+  in, so the cache is keyed on the card colour too; it stays bounded by
+  (pill kinds x card colours) rather than by entry count.
+
+- **Copying a password armed its auto-clear again.** The flash on a copy
+  button still read `fg_color`, which is a CTkButton option and does not
+  exist on the labels the cards are built from now. It raised after the
+  password reached the clipboard and before the auto-clear was
+  scheduled, so the secret stayed there until something else overwrote
+  it, and the only visible symptom was a missing confirmation. Both
+  lists went through that path. `flash_button` handles either kind of
+  button, and the click is covered by a test now — nothing had ever
+  clicked one.
+
 - **The Mini Vault's cards are plain Tk widgets too**, and share the main
   list's cache. `CardPool` in `ui/widgets.py` owns the reuse and the
   invalidation for both lists, with one `card_signature` deciding what

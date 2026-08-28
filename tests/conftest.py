@@ -9,13 +9,111 @@ support after a few dozen roots, and the failure surfaces as an unrelated
 from __future__ import annotations
 
 import copy
+import logging
+import logging.handlers
 import os
+import re
 import shutil
 import sys
 import tempfile
 import tkinter as tk
 
 import pytest
+
+# Redirect APPDATA before anything imports the package.
+#
+# `password_vault/__init__.py` opens %APPDATA%/PasswordVault/vault.log at
+# import time and attaches it to the root logger, and its guard means the
+# first handler wins for the rest of the process. pytest imports this
+# conftest before any test module, so this is the only point early enough
+# to catch it -- doing it in a fixture is far too late.
+#
+# Without this the suite writes thousands of lines into the log of the
+# copy the user actually runs, and rotation then throws away the real
+# history. That log is the only record of anything a user reports, so
+# filling it with test output destroys the evidence.
+REAL_APPDATA = os.environ.get("APPDATA", os.path.expanduser("~"))
+LOG_SANDBOX = tempfile.mkdtemp(prefix="pv-tests-")
+os.environ["APPDATA"] = LOG_SANDBOX
+
+
+# ─── Keep the windows off the user's screen ──────────────────
+#
+# These tests drive a real Tk application: a session-wide main window plus
+# a Toplevel for every dialog under test. On a developer's machine that
+# means windows appearing, taking focus and disappearing for the minutes a
+# run takes, which is indistinguishable from the app misbehaving on its
+# own -- it was reported as exactly that.
+#
+# The windows still have to be *mapped*, because several tests ask whether
+# a card or a dialog is actually on screen. So they are mapped somewhere
+# nobody is looking rather than hidden: the position in every geometry
+# request is rewritten, the size is left alone, and the calls that pull a
+# window to the front are made into no-ops for the duration of the run.
+OFFSCREEN_AT = "+30000+30000"
+_GEOMETRY = re.compile(r"^(?P<size>\d+x\d+)?(?P<pos>[+-]\d+[+-]\d+)?$")
+
+_real_geometry = tk.Wm.wm_geometry
+_real_attributes = tk.Wm.wm_attributes
+
+
+def _offscreen_geometry(self, newGeometry=None, **kwargs):
+    """Honour the requested size; ignore the requested position."""
+    if isinstance(newGeometry, str):
+        match = _GEOMETRY.match(newGeometry)
+        if match:
+            newGeometry = (match.group("size") or "") + OFFSCREEN_AT
+    return _real_geometry(self, newGeometry, **kwargs)
+
+
+def _no_topmost(self, *args, **kwargs):
+    """`-topmost` on a test window puts it over whatever is being read."""
+    if args and args[0] == "-topmost":
+        return ""
+    return _real_attributes(self, *args, **kwargs)
+
+
+def _place_offscreen(window) -> None:
+    try:
+        _real_geometry(window, OFFSCREEN_AT)
+    except tk.TclError:
+        pass
+
+
+def _offscreen_init(cls):
+    """Move a window out of sight as soon as it is built.
+
+    Rewriting `geometry` is not enough on its own: a window that never
+    asks for a position gets one from the window manager, which put the
+    dialogs in this app at the top left of the display.
+    """
+    original = cls.__init__
+
+    def __init__(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        _place_offscreen(self)
+
+    __init__.__wrapped__ = original
+    cls.__init__ = __init__
+
+
+def _install_offscreen() -> None:
+    tk.Wm.wm_geometry = _offscreen_geometry
+    tk.Wm.geometry = _offscreen_geometry
+    tk.Wm.wm_attributes = _no_topmost
+    tk.Wm.attributes = _no_topmost
+    # Raising and focusing are what make the windows impossible to ignore.
+    # `focus_force` also steals the keyboard from whatever the person at
+    # the machine is actually typing into.
+    for name in ("lift", "tkraise", "focus_force"):
+        setattr(tk.Misc, name, lambda self, *a, **k: None)
+    import customtkinter as ctk
+
+    for cls in (tk.Tk, tk.Toplevel, ctk.CTk, ctk.CTkToplevel):
+        _offscreen_init(cls)
+
+
+_install_offscreen()
 
 
 def _display_available() -> bool:
@@ -25,6 +123,21 @@ def _display_available() -> bool:
         return False
     root.destroy()
     return True
+
+
+def _assert_log_is_sandboxed() -> None:
+    """Fail loudly rather than quietly writing to the real log."""
+    for handler in logging.getLogger().handlers:
+        path = getattr(handler, "baseFilename", None)
+        if path and not os.path.abspath(path).startswith(
+                os.path.abspath(LOG_SANDBOX)):
+            raise RuntimeError(
+                "the test suite is logging to a real vault log: "
+                f"{path}. Something imported password_vault before "
+                "conftest redirected APPDATA.")
+
+
+_assert_log_is_sandboxed()
 
 
 HAS_DISPLAY = _display_available()
@@ -67,6 +180,7 @@ FAKE_KEY = b"0" * 44
 # writes. Anything that has to touch the app's real files must go through
 # the `app_crypto` fixture rather than a fresh import.
 _APP_CRYPTO = None
+_APP_WIDGETS = None
 
 
 @pytest.fixture(scope="session")
@@ -82,8 +196,9 @@ def _live_app():
 
     import main as main_module
 
-    global _APP_CRYPTO
+    global _APP_CRYPTO, _APP_WIDGETS
     _APP_CRYPTO = sys.modules["password_vault.crypto"]
+    _APP_WIDGETS = sys.modules["password_vault.ui.widgets"]
 
     vault = main_module.PasswordVault()
     # The real save path needs a working key and a writable vault file;
@@ -127,6 +242,20 @@ def app_crypto(_live_app):
     """
     assert _APP_CRYPTO is not None, "the app was never built"
     return _APP_CRYPTO
+
+
+@pytest.fixture
+def app_widgets(_live_app):
+    """The widgets module the running app actually uses.
+
+    Same trap as `app_crypto`, and it bites harder here because the
+    module holds caches. A test that imports `password_vault.ui.widgets`
+    at collection time gets the copy from before `_live_app` cleared
+    `sys.modules`, so it reads an empty pill cache while the app fills a
+    different one — and concludes the cache is broken when it is fine.
+    """
+    assert _APP_WIDGETS is not None, "the app was never built"
+    return _APP_WIDGETS
 
 
 @pytest.fixture

@@ -385,6 +385,13 @@ Tk-dependent tests skip themselves automatically when no display is available.
   The Mini Vault works the same way and shares the cache: `CardPool` in
   `ui/widgets.py` owns the reuse and the invalidation for both lists.
 
+  The small buttons on a card are labels too. They keep their rounded
+  corners by wearing a cached `tk.PhotoImage` of a pill, drawn under the
+  text with `compound="center"` — 15% more than a plain label, against
+  14x for the CTkButton it replaced. A consequence worth knowing: those
+  buttons have no `fg_color`, so anything that wants to recolour one has
+  to go through `flash_button` rather than configuring it directly.
+
   Two consequences worth knowing: plain widgets do not follow the
   appearance mode on their own, so both lists are repainted when the theme
   or language changes; and they hold a cache, so anything that edits an
@@ -438,6 +445,32 @@ and start again.
 - Exported CSV/Excel values are escaped so a cell starting with `=`, `+`, `-`, or `@` cannot execute as a spreadsheet formula.
 
 ---
+
+
+## Running the tests
+
+```
+python -m pytest tests -q
+```
+
+The suite drives a real Tk application rather than mocking one, so it
+needs a display and takes a few minutes. It keeps to itself while it
+runs:
+
+- **Windows are placed at +30000+30000**, not hidden. Several tests ask
+  whether a card or a dialog is actually on screen, so the windows have
+  to stay mapped — they are just mapped where nobody is looking.
+  `focus_force` and `lift` are disabled for the run so nothing takes the
+  keyboard away from whatever you are doing.
+- **`APPDATA` is redirected before the package is imported.** That is
+  what keeps the suite out of `%APPDATA%/PasswordVault` — both the vault
+  files and `vault.log`. It has to happen at import time, because the log
+  handler is attached when `password_vault` is first imported and the
+  first handler wins for the rest of the process.
+
+`tests/test_offscreen.py` and `tests/test_logging.py` hold both of those
+to their word; if you see a test window on your desktop, one of them
+should be failing.
 
 ## 📝 License
 
