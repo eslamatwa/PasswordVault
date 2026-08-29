@@ -1250,6 +1250,22 @@ class PasswordVault:
         tip(lbl4, t("Automatically clear copied passwords "
                   "from clipboard after this time."))
 
+        # ── REMOTE SESSIONS ──
+        g_remote = ios_group(scroll, "Remote Sessions")
+        r_cl, lbl_cl = setting_row(g_remote, "🖥️", "Extra SSH Client",
+                                   idx=0)
+        client_var = ctk.StringVar(value=s.get("ssh_client_path", ""))
+        client_e = ctk.CTkEntry(
+            r_cl, textvariable=client_var, width=190, height=28,
+            font=ctk.CTkFont(size=11), fg_color=INPUT_BG, border_width=0,
+            corner_radius=6, text_color=TEXT_PRI, justify=ltr_justify(),
+            placeholder_text=t("full path to an .exe"))
+        client_e.pack(side=side_end())
+        tip(lbl_cl,
+            t("MobaXterm, PuTTY and Windows SSH are found automatically. "
+              "Point at another client here — a portable copy, or one "
+              "installed somewhere unusual."))
+
         # ── PASSWORD GENERATOR ──
         g_gen = ios_group(scroll, "Password Generator Defaults")
 
@@ -1406,6 +1422,7 @@ class PasswordVault:
                 lo_var.get(), 30)
             self.settings["clipboard_clear_seconds"] = cl_map.get(
                 cl_var.get(), 0)
+            self.settings["ssh_client_path"] = client_var.get().strip()
             self.settings["gen_length"] = gl_var.get()
             self.settings["gen_upper"] = bool(gen_upper.get())
             self.settings["gen_lower"] = bool(gen_lower.get())

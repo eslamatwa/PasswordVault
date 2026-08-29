@@ -145,6 +145,23 @@ python -m pyflakes main.py password_vault tests
   Both menus call one helper. The Mini Vault had its own copy of these
   items, which is exactly the drift worth removing.
 
+- **The custom SSH client setting works now, and can be reached.** It
+  shipped dead. Settings are validated against a whitelist on load and
+  `ssh_client_path` was not in it, so every stored value was dropped with
+  a warning nobody reads. The tests passed because they handed the dict
+  straight to the detector and never went through `load_settings`, which
+  is the part that broke it — a reminder that a test which skips the
+  wiring tests only the half that was already right.
+
+  It also had no UI, which made it half a feature even once fixed:
+  editable only by hand-editing JSON. Settings has a *Remote Sessions*
+  group with an **Extra SSH Client** field now.
+
+  One decision inside it: the path is not checked for existence at load.
+  Settings are read while the vault is still locked, so a client on a
+  network drive that is not mounted yet would be silently forgotten
+  forever. Detection checks the file when it actually needs it.
+
 - **Typed servers, and the menu items that stopped refusing them.** Two
   changes from the same report, and the same root cause: one domain
   account opens dozens of machines, and the entry holding it has no host

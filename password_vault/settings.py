@@ -43,6 +43,10 @@ DEFAULT_SETTINGS: dict = {
     "max_login_attempts": 5,
     "lockout_seconds": 30,
     "clipboard_clear_seconds": 30,
+    # An SSH client the user pointed at by hand. Detection covers the
+    # usual installs; this is for a portable copy, a KiTTY, or anything
+    # that lives somewhere no fixed path would guess.
+    "ssh_client_path": "",
     "theme": "Dark",
     "language": "English",
     # Whether the "there is no recovery" prompt has been shown, and
@@ -77,6 +81,11 @@ _SPEC: dict[str, tuple] = {
     "max_login_attempts": (int, lambda v: 1 <= v <= 100),
     "lockout_seconds": (int, lambda v: 0 <= v <= 24 * 3600),
     "clipboard_clear_seconds": (int, lambda v: 0 <= v <= 3600),
+    # Not checked for existence here: settings are read while the vault
+    # is still locked, and a path on a drive that is not mounted yet
+    # should not be silently forgotten. Detection checks the file when
+    # it actually needs it.
+    "ssh_client_path": (str, lambda v: len(v) <= 512),
     "theme": (str, lambda v: v in THEME_MODES),
     "language": (str, lambda v: v in LANGUAGE_CODES),
     "backup_prompted": (bool, None),

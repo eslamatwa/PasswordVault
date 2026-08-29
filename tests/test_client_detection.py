@@ -115,3 +115,51 @@ class TestEveryClientCanBeLaunched:
             assert cmd, f"{name} produced no command"
             assert any(path in str(part) or "cmd" == part
                        for part in cmd), f"{name}: {cmd}"
+
+
+class TestTheSettingActuallySurvives:
+    """The gap that let a dead feature ship.
+
+    Every test above hands `_detect_ssh_clients` a dict directly, which
+    skips the part that turned out to matter: settings are validated
+    against a schema on load, and an unknown key is dropped with a
+    warning nobody reads. `ssh_client_path` was not in that schema, so
+    the setting worked in tests and did nothing at all for a real user.
+
+    These go through `load_settings`, the way the app gets them.
+    """
+
+    def _round_trip(self, tmp_path, monkeypatch, value):
+        import importlib
+        import json
+
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+        settings = importlib.reload(
+            importlib.import_module("password_vault.settings"))
+        os.makedirs(os.path.dirname(settings.SETTINGS_FILE), exist_ok=True)
+        with open(settings.SETTINGS_FILE, "w", encoding="utf-8") as fh:
+            json.dump({"ssh_client_path": value}, fh)
+        return settings.load_settings().get("ssh_client_path")
+
+    def test_a_stored_path_comes_back(self, tmp_path, monkeypatch):
+        wanted = r"C:\tools\kitty.exe"
+        assert self._round_trip(tmp_path, monkeypatch, wanted) == wanted
+
+    def test_it_has_a_default_so_nothing_has_to_guess(self):
+        import password_vault.settings as settings
+
+        assert "ssh_client_path" in settings.DEFAULT_SETTINGS
+        assert settings.DEFAULT_SETTINGS["ssh_client_path"] == ""
+
+    def test_an_absurd_value_is_still_refused(self, tmp_path, monkeypatch):
+        """Accepting the key must not mean accepting anything under it."""
+        assert self._round_trip(tmp_path, monkeypatch, "x" * 900) in (
+            "", None)
+
+    def test_a_path_on_an_unmounted_drive_is_kept(self, tmp_path,
+                                                  monkeypatch):
+        """Settings load while the vault is still locked, so a network
+        drive may not be there yet. Existence is checked at detection
+        time, not here -- dropping it would lose the setting for good."""
+        wanted = r"Z:\portable\putty.exe"
+        assert self._round_trip(tmp_path, monkeypatch, wanted) == wanted

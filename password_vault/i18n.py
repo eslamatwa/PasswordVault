@@ -286,6 +286,14 @@ ARABIC: dict[str, str] = {
         "في التبويب التاني.",
     "Start a session for every server listed":
         "ابدأ جلسة لكل خادم في القايمة",
+    "Remote Sessions": "الجلسات البعيدة",
+    "Extra SSH Client": "عميل SSH إضافي",
+    "full path to an .exe": "المسار الكامل لملف .exe",
+    "MobaXterm, PuTTY and Windows SSH are found automatically. Point at "
+    "another client here — a portable copy, or one installed somewhere "
+    "unusual.":
+        "MobaXterm و PuTTY و Windows SSH بيتلاقوا تلقائياً. وجّه لعميل "
+        "تاني من هنا — نسخة محمولة، أو واحد متثبّت في مكان غير معتاد.",
     "Select all": "اختيار الكل",
     "Select none": "إلغاء الاختيار",
     "⚠️ Nothing selected": "⚠️ لم يتم اختيار أي شيء",
