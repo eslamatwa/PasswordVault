@@ -238,6 +238,10 @@ ARABIC: dict[str, str] = {
     "🌐  Open URL in Browser": "🌐  فتح الرابط في المتصفح",
     "🌐  Open URL + Copy Username": "🌐  فتح الرابط + نسخ اسم المستخدم",
     "🖥️  SSH Session …": "🖥️  جلسة SSH …",
+    "🖥️  SSH Session …    (set a host or IP)":
+        "🖥️  جلسة SSH …    (اضبط مضيفًا أو IP)",
+    "🖥️  RDP Session …    (set a host or IP)":
+        "🖥️  جلسة RDP …    (اضبط مضيفًا أو IP)",
     "🖥️  RDP Session …": "🖥️  جلسة RDP …",
     "✏️  Edit Entry": "✏️  تعديل العنصر",
     "📌  Pin / Unpin": "📌  تثبيت / إلغاء التثبيت",

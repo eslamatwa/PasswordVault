@@ -1825,16 +1825,14 @@ class PasswordVault:
                 label=t("🌐  Open URL in Browser"),
                 state="disabled")
 
-        # ── SSH / RDP Session ── only for entries that really look like a
-        # remote host, not for every entry that happens to have a URL.
-        if self._looks_remote(entry, url):
-            menu.add_separator()
-            menu.add_command(
-                label=t("🖥️  SSH Session …"),
-                command=lambda: self._show_ssh_dialog(entry))
-            menu.add_command(
-                label=t("🖥️  RDP Session …"),
-                command=lambda: self._show_rdp_dialog(entry))
+        # ── SSH / RDP Session ──
+        # Shown on every entry, greyed out when the entry does not look
+        # like a remote host. Hiding them was worse: the actions simply
+        # were not there, with nothing to say why or what to change, so
+        # the app looked like it had lost the feature. The URL item two
+        # lines up already greys out the same way when there is no URL.
+        menu.add_separator()
+        self._add_remote_items(menu, entry, url)
 
         menu.add_separator()
 
@@ -1853,6 +1851,31 @@ class PasswordVault:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _add_remote_items(self, menu, entry, url) -> None:
+        """Add the SSH and RDP items to *menu*, enabled or explained.
+
+        Both context menus call this, so the rule for when a session can
+        be started lives in one place and the wording cannot drift apart.
+
+        An entry that is not a remote host still gets the items, disabled
+        and carrying the reason. Leaving them out entirely is what the
+        code used to do, and it reads as the feature being missing rather
+        than not applicable: there is nothing on screen to say the
+        actions exist, why this entry cannot use them, or what to change.
+        """
+        if self._looks_remote(entry, url):
+            menu.add_command(
+                label=t("🖥️  SSH Session …"),
+                command=lambda: self._show_ssh_dialog(entry))
+            menu.add_command(
+                label=t("🖥️  RDP Session …"),
+                command=lambda: self._show_rdp_dialog(entry))
+            return
+        menu.add_command(label=t("🖥️  SSH Session …    (set a host or IP)"),
+                         state="disabled")
+        menu.add_command(label=t("🖥️  RDP Session …    (set a host or IP)"),
+                         state="disabled")
 
     @staticmethod
     def _looks_remote(entry: dict, url: str) -> bool:

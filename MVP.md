@@ -127,6 +127,24 @@ python -m pyflakes main.py password_vault tests
   the obvious thing to try. Azure Trusted Signing or an EV certificate
   are the routes that actually work.
 
+- **SSH and RDP are on every entry's menu now, greyed when they do not
+  apply.** They had been added only when the entry looked like a remote
+  host and left out otherwise, which reads as the feature being missing
+  rather than not applicable — nothing on screen said the actions
+  existed, why that entry could not use them, or what to change. A vault
+  of ordinary logins showed no trace of SSH support at all, which is how
+  it was reported.
+
+  Disabled items now carry the reason, "(set a host or IP)". That is
+  already how the same menu treats "Open URL in Browser" on an entry with
+  no URL, so it is the consistent behaviour rather than a new idea. The
+  rule itself is untouched: a webmail entry still does not get a live SSH
+  action, and a test holds that line, since greying out is a presentation
+  change and must not quietly become "offer SSH on anything with a URL".
+
+  Both menus call one helper. The Mini Vault had its own copy of these
+  items, which is exactly the drift worth removing.
+
 - **Several SSH sessions at once.** Ten servers meant ten trips through
   the same dialog, re-picking the same client each time. The new dialog
   lists everything the right-click menu would offer SSH for — the same

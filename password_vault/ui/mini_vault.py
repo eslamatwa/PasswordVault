@@ -224,15 +224,11 @@ class MiniVault(ctk.CTkToplevel):
             menu.add_command(label=t("🌐  Open URL in Browser"),
                              state="disabled")
 
-        # SSH / RDP only when the entry looks like a remote host.
-        if self.app._looks_remote(entry, url):
-            menu.add_separator()
-            menu.add_command(
-                label=t("🖥️  SSH Session …"),
-                command=lambda: self.app._show_ssh_dialog(entry))
-            menu.add_command(
-                label=t("🖥️  RDP Session …"),
-                command=lambda: self.app._show_rdp_dialog(entry))
+        # SSH / RDP, greyed out rather than hidden when the entry does
+        # not look like a remote host -- the same rule and the same
+        # wording as the main window's menu.
+        menu.add_separator()
+        self.app._add_remote_items(menu, entry, url)
         menu.add_separator()
 
         menu.add_command(
