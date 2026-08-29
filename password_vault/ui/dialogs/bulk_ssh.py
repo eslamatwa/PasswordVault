@@ -2,8 +2,14 @@
 
 Opening ten machines one at a time means ten trips through the same
 dialog, re-picking the same client and re-typing nothing that changed.
-This lists everything in the vault that looks like a machine to log into
-and opens the ones that are ticked.
+
+Servers come from the vault or are typed in, and typing is not a
+fallback. One domain account often opens machines that are different
+every time and were never worth storing individually — that is the case
+the vault list cannot serve, and it is the case this feature is most
+useful for. Parsing lives in `ui/bulk_targets.py`, away from the window,
+because a misread line means a session opened to the wrong machine with a
+domain account.
 
 The hard part is not the launching, it is the password. The single
 session flow puts one password on the clipboard for the user to paste;
@@ -27,28 +33,21 @@ from ...theme import (
     ACCENT, ACCENT_HOVER, BG, BG_SEC, BG_TERT, GREEN, GREEN_HOVER, RED,
     SEPARATOR, TEXT_ON_GREEN, TEXT_PRI, TEXT_SEC, TEXT_TERT, cat_emoji,
 )
+from ..bulk_targets import parse_hosts
 from ..widgets import dialog_header, tip
 
 log = logging.getLogger("PasswordVault")
-
-# Gap between launches. Starting ten clients in the same instant makes a
-# cold-starting MobaXterm drop tabs, and it hands the machine a thundering
-# herd of processes for no benefit -- the user cannot read ten terminals
-# at once anyway.
-LAUNCH_STAGGER_MS = 400
 
 # Above this many at once, ask first. Ten SSH sessions is a lot of
 # processes to start from one click, and a mis-click on "select all" in a
 # large vault should not be irreversible.
 CONFIRM_ABOVE = 5
 
+NO_CREDENTIAL = "—"
+
 
 def collect_targets(app) -> list[dict]:
-    """Every entry that plausibly describes a machine to log into.
-
-    Reuses the same test as the right-click menu, so an entry that offers
-    "SSH Session ..." individually is exactly one that appears here.
-    """
+    """Every entry that plausibly describes a machine to log into."""
     targets = []
     for entry in app.data.get("entries", []):
         url = entry.get("url", "") or ""
@@ -72,6 +71,34 @@ def collect_targets(app) -> list[dict]:
     return targets
 
 
+def credential_choices(app) -> list[tuple[str, dict | None]]:
+    """Entries offered as the account for typed hosts.
+
+    Every entry, not only the server-looking ones: the whole point of
+    typing hosts is that the account is a domain login whose entry has no
+    host of its own and never will.
+    """
+    choices: list[tuple[str, dict | None]] = [(NO_CREDENTIAL, None)]
+    for entry in app.data.get("entries", []):
+        title = entry.get("title", "") or t("(untitled)")
+        user = entry.get("username", "")
+        choices.append((f"{title} — {user}" if user else title, entry))
+    return choices
+
+
+def _label_of(target) -> str:
+    """What to call this row.
+
+    A typed host names itself. A vault entry is named by its title, which
+    is what the user picked it by — and typed hosts sharing one credential
+    entry would otherwise all show that entry's title.
+    """
+    if target.get("label"):
+        return target["label"]
+    entry = target.get("entry") or {}
+    return entry.get("title", "")
+
+
 def _describe(target) -> str:
     """user@host:port, leaving out the parts that carry no information."""
     text = target["host"]
@@ -83,36 +110,18 @@ def _describe(target) -> str:
 
 
 def show(app) -> None:
-    targets = collect_targets(app)
-    dlg = app._make_dialog("Open Multiple SSH Sessions", 520, 560)
-
+    dlg = app._make_dialog("Open Multiple SSH Sessions", 560, 640)
     dialog_header(dlg, t("🖥️  Open Multiple SSH Sessions"),
                   size=15, pady=(14, 2))
 
-    if not targets:
-        ctk.CTkLabel(
-            dlg,
-            text=t("No entries look like a server.\n\nAn entry qualifies "
-                   "when its category is a server one, or its address is "
-                   "a bare host, an IP, or an ssh:// address."),
-            font=ctk.CTkFont(size=11), text_color=TEXT_SEC,
-            justify="center", wraplength=440).pack(
-            expand=True, padx=24, pady=20)
-        ctk.CTkButton(
-            dlg, text=t("Close"), width=110, height=36,
-            font=ctk.CTkFont(size=12), fg_color=BG_TERT,
-            hover_color=SEPARATOR, text_color=TEXT_SEC, corner_radius=8,
-            command=dlg.destroy).pack(pady=(0, 16))
-        return
-
-    clients = app._detect_ssh_clients()
+    clients = app._detect_ssh_clients(app.settings)
     subtitle = ctk.CTkLabel(
         dlg, text="", font=ctk.CTkFont(size=10), text_color=TEXT_TERT)
-    subtitle.pack(pady=(0, 8))
+    subtitle.pack(pady=(0, 6))
 
     # ── Client, once for the whole batch ──
     top = ctk.CTkFrame(dlg, fg_color="transparent")
-    top.pack(fill="x", padx=16, pady=(0, 6))
+    top.pack(fill="x", padx=16, pady=(0, 4))
     ctk.CTkLabel(top, text=t("SSH Client"),
                  font=ctk.CTkFont(family="Segoe UI", size=12),
                  text_color=TEXT_PRI).pack(side=side_start())
@@ -127,83 +136,133 @@ def show(app) -> None:
         dropdown_hover_color=ACCENT, text_color=TEXT_PRI,
         state="readonly").pack(side=side_end())
 
-    scroll = ctk.CTkScrollableFrame(dlg, fg_color="transparent",
-                                    scrollbar_button_color=BG_TERT)
-    scroll.pack(fill="both", expand=True, padx=12, pady=(4, 4))
+    FROM_VAULT = t("From the vault")
+    TYPED = t("Type them in")
+    tabs = ctk.CTkTabview(
+        dlg, fg_color=BG_SEC, segmented_button_selected_color=ACCENT,
+        segmented_button_selected_hover_color=ACCENT_HOVER,
+        text_color=TEXT_PRI, height=330)
+    tabs.pack(fill="both", expand=True, padx=12, pady=(4, 2))
+    tabs.add(FROM_VAULT)
+    tabs.add(TYPED)
 
+    # ══ Tab 1: pick from the vault ══
+    vault_tab = tabs.tab(FROM_VAULT)
+    targets = collect_targets(app)
     picks: list[tuple[dict, ctk.BooleanVar]] = []
 
-    def _refresh_count(*_args):
-        chosen = sum(1 for _, var in picks if var.get())
-        subtitle.configure(
-            text=t("{chosen} of {total} selected", chosen=chosen,
-                   total=len(picks)))
-        if chosen:
-            go.configure(state="normal",
-                         text=t("🖥️  Open {n} sessions", n=chosen))
-        else:
-            go.configure(state="disabled", text=t("🖥️  Open sessions"))
-
-    for target in targets:
-        entry = target["entry"]
-        row = ctk.CTkFrame(scroll, fg_color=BG_SEC, corner_radius=8)
-        row.pack(fill="x", pady=3)
-        inner = ctk.CTkFrame(row, fg_color="transparent")
-        inner.pack(fill="x", padx=10, pady=7)
-
-        var = ctk.BooleanVar(value=not target["problem"])
-        box = ctk.CTkCheckBox(
-            inner, text="", width=24, checkbox_width=20, checkbox_height=20,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, corner_radius=5,
-            border_width=2, variable=var, command=_refresh_count)
-        box.pack(side=side_start())
-        if target["problem"]:
-            # Cannot be launched, so it cannot be selected. The reason is
-            # shown rather than the row being dropped, because an entry
-            # that offers SSH from its own menu and is missing here would
-            # look like a bug in the list.
-            box.configure(state="disabled")
-
-        text_col = ctk.CTkFrame(inner, fg_color="transparent")
-        text_col.pack(side=side_start(), fill="x", expand=True,
-                      padx=pad(8, 0))
+    if not targets:
         ctk.CTkLabel(
-            text_col,
-            text=f"{cat_emoji(entry.get('category', ''))}  "
-                 f"{entry.get('title', '')}",
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            text_color=TEXT_PRI, anchor=anchor_start()).pack(
-            fill="x")
-        detail = (target["problem"] if target["problem"]
-                  else _describe(target))
-        ctk.CTkLabel(
-            text_col, text=detail, font=ctk.CTkFont(size=10),
-            text_color=RED if target["problem"] else TEXT_SEC,
-            anchor=anchor_start()).pack(fill="x")
+            vault_tab,
+            text=t("Nothing in the vault looks like a server.\n\n"
+                   "Give an entry a host or IP as its address, or a "
+                   "server category — or type the servers in on the "
+                   "other tab."),
+            font=ctk.CTkFont(size=11), text_color=TEXT_SEC,
+            justify="center", wraplength=440).pack(expand=True, padx=20)
+    else:
+        scroll = ctk.CTkScrollableFrame(vault_tab, fg_color="transparent",
+                                        scrollbar_button_color=BG_TERT)
+        scroll.pack(fill="both", expand=True)
 
-        if not target["problem"]:
-            picks.append((target, var))
-            var.trace_add("write", _refresh_count)
+        for target in targets:
+            entry = target["entry"]
+            row = ctk.CTkFrame(scroll, fg_color=BG, corner_radius=8)
+            row.pack(fill="x", pady=3)
+            inner = ctk.CTkFrame(row, fg_color="transparent")
+            inner.pack(fill="x", padx=10, pady=7)
 
-    # ── Select all / none ──
-    tools = ctk.CTkFrame(dlg, fg_color="transparent")
-    tools.pack(fill="x", padx=16, pady=(0, 4))
+            var = ctk.BooleanVar(value=not target["problem"])
+            box = ctk.CTkCheckBox(
+                inner, text="", width=24, checkbox_width=20,
+                checkbox_height=20, fg_color=ACCENT,
+                hover_color=ACCENT_HOVER, corner_radius=5,
+                border_width=2, variable=var)
+            box.pack(side=side_start())
+            if target["problem"]:
+                box.configure(state="disabled")
 
-    def _set_all(value):
-        for _, var in picks:
-            var.set(value)
-        _refresh_count()
+            text_col = ctk.CTkFrame(inner, fg_color="transparent")
+            text_col.pack(side=side_start(), fill="x", expand=True,
+                          padx=pad(8, 0))
+            ctk.CTkLabel(
+                text_col,
+                text=f"{cat_emoji(entry.get('category', ''))}  "
+                     f"{entry.get('title', '')}",
+                font=ctk.CTkFont(family="Segoe UI", size=12,
+                                 weight="bold"),
+                text_color=TEXT_PRI, anchor=anchor_start()).pack(fill="x")
+            ctk.CTkLabel(
+                text_col,
+                text=(target["problem"] if target["problem"]
+                      else _describe(target)),
+                font=ctk.CTkFont(size=10),
+                text_color=RED if target["problem"] else TEXT_SEC,
+                anchor=anchor_start()).pack(fill="x")
 
-    for label, value in ((t("Select all"), True), (t("Select none"), False)):
-        ctk.CTkButton(
-            tools, text=label, width=90, height=28,
-            font=ctk.CTkFont(size=11), fg_color=BG_TERT,
-            hover_color=SEPARATOR, text_color=TEXT_SEC, corner_radius=6,
-            command=lambda v=value: _set_all(v)).pack(
-            side=side_start(), padx=pad(0, 6))
+            if not target["problem"]:
+                picks.append((target, var))
+                var.trace_add("write", lambda *_a: _refresh_count())
+
+        tools = ctk.CTkFrame(vault_tab, fg_color="transparent")
+        tools.pack(fill="x", pady=(4, 0))
+
+        def _set_all(value):
+            for _, var in picks:
+                var.set(value)
+
+        for label, value in ((t("Select all"), True),
+                             (t("Select none"), False)):
+            ctk.CTkButton(
+                tools, text=label, width=90, height=28,
+                font=ctk.CTkFont(size=11), fg_color=BG_TERT,
+                hover_color=SEPARATOR, text_color=TEXT_SEC,
+                corner_radius=6,
+                command=lambda v=value: _set_all(v)).pack(
+                side=side_start(), padx=pad(0, 6))
+
+    # ══ Tab 2: type them in ══
+    typed_tab = tabs.tab(TYPED)
+    ctk.CTkLabel(
+        typed_tab,
+        text=t("One server per line:  host   or   user@host   or   "
+               "user@host:port"),
+        font=ctk.CTkFont(size=10), text_color=TEXT_TERT,
+        anchor=anchor_start()).pack(fill="x", pady=(0, 4))
+
+    hosts_box = ctk.CTkTextbox(
+        typed_tab, height=170, font=ctk.CTkFont(family="Consolas", size=12),
+        fg_color=BG, border_width=0, corner_radius=8, text_color=TEXT_PRI,
+        wrap="none")
+    hosts_box.pack(fill="both", expand=True)
+    hosts_box.bind("<KeyRelease>", lambda _e: _refresh_count())
+
+    cred_row = ctk.CTkFrame(typed_tab, fg_color="transparent")
+    cred_row.pack(fill="x", pady=(6, 0))
+    ctk.CTkLabel(cred_row, text=t("Account"),
+                 font=ctk.CTkFont(family="Segoe UI", size=12),
+                 text_color=TEXT_PRI).pack(side=side_start())
+    choices = credential_choices(app)
+    cred_var = ctk.StringVar(
+        value=choices[1][0] if len(choices) > 1 else NO_CREDENTIAL)
+    ctk.CTkComboBox(
+        cred_row, values=[name for name, _ in choices], variable=cred_var,
+        width=280, height=32, font=ctk.CTkFont(size=11), fg_color=BG,
+        border_width=0, corner_radius=8, button_color=ACCENT,
+        button_hover_color=ACCENT_HOVER, dropdown_fg_color=BG_SEC,
+        dropdown_hover_color=ACCENT, text_color=TEXT_PRI,
+        state="readonly", command=lambda _v: _refresh_count()).pack(
+        side=side_end())
+    ctk.CTkLabel(
+        typed_tab,
+        text=t("Its username fills in any line that does not name one, "
+               "and its password is what the panel copies."),
+        font=ctk.CTkFont(size=9), text_color=TEXT_TERT,
+        wraplength=480, anchor=anchor_start()).pack(fill="x", pady=(2, 0))
 
     err = ctk.CTkLabel(dlg, text="", text_color=RED,
-                       font=ctk.CTkFont(size=10), height=14)
+                       font=ctk.CTkFont(size=10), height=14,
+                       wraplength=500)
     err.pack(fill="x", padx=16)
 
     ctk.CTkLabel(
@@ -211,7 +270,42 @@ def show(app) -> None:
         text=t("💡 Passwords are not copied automatically — a panel opens "
                "with one button per server"),
         font=ctk.CTkFont(size=9), text_color=TEXT_TERT,
-        wraplength=470).pack(fill="x", padx=16, pady=(0, 4))
+        wraplength=500).pack(fill="x", padx=16, pady=(0, 4))
+
+    def _credential():
+        return next((e for name, e in choices if name == cred_var.get()),
+                    None)
+
+    def _typed_targets():
+        """Parse the box, attaching the chosen account to each host."""
+        entry = _credential()
+        found, problems = parse_hosts(
+            hosts_box.get("1.0", "end"),
+            default_user=(entry or {}).get("username", ""),
+            check=app._check_remote_arg)
+        for target in found:
+            target["entry"] = entry
+        return found, problems
+
+    def _current():
+        if tabs.get() == TYPED:
+            return _typed_targets()
+        return [target for target, var in picks if var.get()], []
+
+    def _refresh_count(*_args):
+        chosen, problems = _current()
+        if tabs.get() == TYPED:
+            subtitle.configure(text=t("{n} servers typed", n=len(chosen)))
+        else:
+            subtitle.configure(
+                text=t("{chosen} of {total} selected", chosen=len(chosen),
+                       total=len(picks)))
+        err.configure(text=problems[0] if problems else "")
+        if chosen:
+            go.configure(state="normal",
+                         text=t("🖥️  Open {n} sessions", n=len(chosen)))
+        else:
+            go.configure(state="disabled", text=t("🖥️  Open sessions"))
 
     btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
     btn_row.pack(fill="x", padx=16, pady=(0, 14))
@@ -222,7 +316,13 @@ def show(app) -> None:
         command=dlg.destroy).pack(side=side_start())
 
     def launch():
-        chosen = [target for target, var in picks if var.get()]
+        chosen, problems = _current()
+        if problems:
+            # Refused lines are reported, never skipped in silence: a
+            # dropped server looks the same as one that failed to connect.
+            err.configure(text="  •  ".join(problems[:3]))
+            if not chosen:
+                return
         if not chosen:
             err.configure(text=t("⚠️ Nothing selected"))
             return
@@ -256,8 +356,10 @@ def show(app) -> None:
         hover_color=GREEN_HOVER, text_color=TEXT_ON_GREEN,
         corner_radius=8, command=launch)
     go.pack(side=side_end(), fill="x", expand=True, padx=pad(8, 0))
-    tip(go, t("Start a session for every ticked server"))
+    tip(go, t("Start a session for every server listed"))
 
+    # Switching tabs changes what "open" means, so the count has to follow.
+    tabs.configure(command=_refresh_count)
     _refresh_count()
 
 
@@ -288,7 +390,7 @@ def show_password_panel(app, launched: list[dict]) -> ctk.CTkToplevel:
     scroll.pack(fill="both", expand=True, padx=10, pady=(0, 8))
 
     for target in launched:
-        entry = target["entry"]
+        entry = target.get("entry")
         row = ctk.CTkFrame(scroll, fg_color=BG_SEC, corner_radius=8)
         row.pack(fill="x", pady=3)
         inner = ctk.CTkFrame(row, fg_color="transparent")
@@ -297,21 +399,28 @@ def show_password_panel(app, launched: list[dict]) -> ctk.CTkToplevel:
         text_col = ctk.CTkFrame(inner, fg_color="transparent")
         text_col.pack(side=side_start(), fill="x", expand=True)
         ctk.CTkLabel(
-            text_col, text=entry.get("title", ""),
+            text_col, text=_label_of(target),
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color=TEXT_PRI, anchor=anchor_start()).pack(fill="x")
         ctk.CTkLabel(
             text_col, text=_describe(target), font=ctk.CTkFont(size=10),
             text_color=TEXT_SEC, anchor=anchor_start()).pack(fill="x")
 
-        button = ctk.CTkButton(
-            inner, text=t("🔑 Copy"), width=76, height=30,
-            font=ctk.CTkFont(size=11), fg_color=ACCENT,
-            hover_color=ACCENT_HOVER, corner_radius=7)
-        button.pack(side=side_end())
-        button.configure(
-            command=lambda e=entry, b=button: app._stage_password_for_paste(
-                e, button=b))
+        if entry:
+            button = ctk.CTkButton(
+                inner, text=t("🔑 Copy"), width=76, height=30,
+                font=ctk.CTkFont(size=11), fg_color=ACCENT,
+                hover_color=ACCENT_HOVER, corner_radius=7)
+            button.pack(side=side_end())
+            button.configure(
+                command=lambda e=entry, b=button:
+                    app._stage_password_for_paste(e, button=b))
+        else:
+            # Typed hosts with no account chosen. Showing a dead button
+            # would suggest a password exists to copy.
+            ctk.CTkLabel(
+                inner, text=t("no account"), font=ctk.CTkFont(size=10),
+                text_color=TEXT_TERT).pack(side=side_end())
 
     ctk.CTkButton(
         panel, text=t("Close"), height=32, font=ctk.CTkFont(size=12),

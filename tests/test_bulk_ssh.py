@@ -321,14 +321,31 @@ class TestTheDialog:
             app.root.update()
 
     def test_it_says_so_when_there_are_no_servers(self, app, bulk):
+        """And points at the other tab, which still works — the dialog
+        is no longer useless just because the vault has no servers."""
         _servers(app, [_entry(url="https://mail.example.com/in",
                               category="General")])
         bulk.show(app)
         app.root.update()
         dlg = app._grab_stack[-1]
         try:
-            assert "No entries look like a server" in _all_text(dlg) or \
-                "لا يوجد" in _all_text(dlg)
+            text = _all_text(dlg)
+            assert ("Nothing in the vault looks like a server" in text
+                    or "مفيش حاجة في الخزنة" in text), text[:200]
+            assert len(_tab_names(dlg)) == 2, \
+                "the empty state does not offer the typed tab"
+        finally:
+            dlg.destroy()
+            app.root.update()
+
+    def test_both_tabs_are_offered(self, app, bulk):
+        _servers(app, [_entry()])
+        bulk.show(app)
+        app.root.update()
+        dlg = app._grab_stack[-1]
+        try:
+            names = _tab_names(dlg)
+            assert len(names) == 2, names
         finally:
             dlg.destroy()
             app.root.update()
@@ -386,6 +403,25 @@ class TestHowYouReachIt:
             for dlg in list(app._grab_stack):
                 dlg.destroy()
             app.root.update()
+
+
+def _tab_names(widget):
+    """The tab labels of the dialog's CTkTabview.
+
+    Read off the tabview rather than from the visible text: its tab
+    buttons are a segmented button, whose labels `_all_text` does not
+    reach. `_name_list` is private, and using it is the price of there
+    being no public way to ask.
+    """
+    import customtkinter as ctk
+
+    for child in widget.winfo_children():
+        if isinstance(child, ctk.CTkTabview):
+            return list(child._name_list)
+        found = _tab_names(child)
+        if found:
+            return found
+    return []
 
 
 def _all_text(widget, out=None):

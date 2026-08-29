@@ -1853,29 +1853,31 @@ class PasswordVault:
             menu.grab_release()
 
     def _add_remote_items(self, menu, entry, url) -> None:
-        """Add the SSH and RDP items to *menu*, enabled or explained.
+        """Add the SSH and RDP items to *menu*. Always live.
 
-        Both context menus call this, so the rule for when a session can
-        be started lives in one place and the wording cannot drift apart.
+        Both context menus call this, so the rule lives in one place and
+        the wording cannot drift apart.
 
-        An entry that is not a remote host still gets the items, disabled
-        and carrying the reason. Leaving them out entirely is what the
-        code used to do, and it reads as the feature being missing rather
-        than not applicable: there is nothing on screen to say the
-        actions exist, why this entry cannot use them, or what to change.
+        These went through two wrong versions before this one. First they
+        appeared only when the entry looked like a remote host, which
+        reads as the feature being absent rather than inapplicable — a
+        vault of ordinary logins showed no trace of SSH support at all.
+        Then they were shown greyed out with a reason, which explained
+        the situation but still refused the most useful case.
+
+        That case: one domain account opens dozens of machines. The entry
+        holding those credentials has no host of its own and never will,
+        because the host is different every time. Requiring a host on the
+        entry blocks precisely the workflow the feature exists for. The
+        host belongs in the dialog, which already has a field for it, and
+        which already refuses to connect without one.
         """
-        if self._looks_remote(entry, url):
-            menu.add_command(
-                label=t("🖥️  SSH Session …"),
-                command=lambda: self._show_ssh_dialog(entry))
-            menu.add_command(
-                label=t("🖥️  RDP Session …"),
-                command=lambda: self._show_rdp_dialog(entry))
-            return
-        menu.add_command(label=t("🖥️  SSH Session …    (set a host or IP)"),
-                         state="disabled")
-        menu.add_command(label=t("🖥️  RDP Session …    (set a host or IP)"),
-                         state="disabled")
+        menu.add_command(
+            label=t("🖥️  SSH Session …"),
+            command=lambda: self._show_ssh_dialog(entry))
+        menu.add_command(
+            label=t("🖥️  RDP Session …"),
+            command=lambda: self._show_rdp_dialog(entry))
 
     @staticmethod
     def _looks_remote(entry: dict, url: str) -> bool:
@@ -1932,7 +1934,7 @@ class PasswordVault:
 
     # ─── Detect available SSH/RDP clients ────────────────────
     @staticmethod
-    def _detect_ssh_clients():
+    def _detect_ssh_clients(self_settings=None):
         """Detect the SSH clients installed on this machine.
 
         Order is the order of the dropdown, and the first entry is what a
@@ -1963,7 +1965,10 @@ class PasswordVault:
                 clients.append(("MobaXterm", p))
                 break
 
-        # PuTTY
+        # PuTTY. The fixed list below covers the installers; `which`
+        # covers everything else, which in practice is most of it --
+        # winget drops a shim on PATH, a portable copy lives wherever it
+        # was unzipped, and neither is under Program Files.
         putty_paths = [
             os.path.join(os.environ.get("ProgramFiles", ""),
                          "PuTTY", "putty.exe"),
@@ -1971,11 +1976,13 @@ class PasswordVault:
                          "PuTTY", "putty.exe"),
             os.path.join(os.environ.get("LOCALAPPDATA", ""),
                          "Programs", "PuTTY", "putty.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Microsoft", "WinGet", "Links", "putty.exe"),
         ]
-        for p in putty_paths:
-            if p and os.path.isfile(p):
-                clients.append(("PuTTY", p))
-                break
+        found = next((p for p in putty_paths if p and os.path.isfile(p)),
+                     None) or shutil.which("putty")
+        if found:
+            clients.append(("PuTTY", found))
 
         # Windows built-in SSH, last: it is the fallback everyone has.
         win_ssh = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
@@ -1984,9 +1991,18 @@ class PasswordVault:
             clients.append(("Windows SSH", win_ssh))
         else:
             # ssh.exe might be on PATH
-            found = shutil.which("ssh")
-            if found:
-                clients.append(("Windows SSH", found))
+            on_path = shutil.which("ssh")
+            if on_path:
+                clients.append(("Windows SSH", on_path))
+
+        # A client the user pointed at by hand, last and only if it is
+        # still there. Detection covers the common installs; this covers
+        # the rest without another release.
+        custom = (self_settings or {}).get("ssh_client_path", "")
+        if custom and os.path.isfile(custom):
+            name = os.path.splitext(os.path.basename(custom))[0]
+            if name.lower() not in {n.lower() for n, _ in clients}:
+                clients.append((name, custom))
 
         return clients
 
@@ -2066,7 +2082,8 @@ class PasswordVault:
             entry.get("url", ""), default_port)))
 
         # SSH Client selector (SSH only)
-        clients = self._detect_ssh_clients() if is_ssh else []
+        clients = (self._detect_ssh_clients(self.settings)
+                   if is_ssh else [])
         client_var = None
         if is_ssh:
             client_names = ([c[0] for c in clients] if clients

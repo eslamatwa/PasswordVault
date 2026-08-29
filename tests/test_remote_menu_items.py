@@ -1,13 +1,17 @@
-"""SSH and RDP appear on every entry's menu, in both lists.
+"""SSH and RDP are live on every entry's menu, in both lists.
 
-They used to be added only when the entry looked like a remote host, and
-left out entirely otherwise. That reads as the feature being missing
-rather than not applicable: nothing on screen says the actions exist, why
-this entry cannot use them, or what to change. A vault whose entries all
-happen to be ordinary logins shows no trace of SSH support at all.
+Two wrong versions came before this one. First the items appeared only
+when the entry looked like a remote host, which reads as the feature
+being absent rather than inapplicable. Then they were shown greyed out
+with a reason, which explained the situation but still refused the case
+the feature is most useful for:
 
-They are shown greyed with the reason instead, which is how the same menu
-already treats "Open URL in Browser" on an entry with no URL.
+    one domain account opens dozens of machines
+
+The entry holding those credentials has no host of its own and never
+will, because the host is different every time. Requiring one on the
+entry blocks exactly that workflow. The host belongs in the dialog, which
+has a field for it and already refuses to connect without one.
 """
 
 from __future__ import annotations
@@ -70,36 +74,26 @@ class TestTheyAreAlwaysThere:
         assert _find(items, "RDP"), "no RDP item at all"
 
 
-class TestWhenTheyWork:
-    def test_a_server_entry_gets_them_enabled(self, app):
-        items = _items(app, _entry(url="10.0.0.5", category="Server"))
-        assert all(state == "normal" for _, state in items), items
+class TestTheyAreAlwaysLive:
+    @pytest.mark.parametrize("entry,why", [
+        (_entry(url="10.0.0.5", category="Server"), "a plain server"),
+        (_entry(url="ssh://box.example.com"), "an ssh url"),
+        (_entry(), "a domain account with no host of its own"),
+        (_entry(url="https://mail.example.com/login"), "a webmail login"),
+    ])
+    def test_nothing_is_greyed_out(self, app, entry, why):
+        items = _items(app, entry)
+        assert items, f"nothing added for {why}"
+        assert all(state == "normal" for _, state in items), \
+            f"{why} was refused: {items}"
 
-    def test_an_ssh_url_gets_them_enabled(self, app):
-        items = _items(app, _entry(url="ssh://box.example.com"))
-        assert all(state == "normal" for _, state in items), items
-
-
-class TestWhenTheyDoNot:
-    def test_an_ordinary_entry_gets_them_greyed(self, app):
-        """The entry in the report: no URL, an everyday category."""
-        items = _items(app, _entry())
-        assert items, "nothing was added"
-        assert all(state == "disabled" for _, state in items), items
-
-    def test_the_greyed_items_say_what_to_change(self, app):
-        """A dead menu entry with no reason is barely better than a
-        missing one."""
-        items = _items(app, _entry())
-        for label, _state in items:
-            assert "host" in label.lower() or "IP" in label, \
-                f"no reason given: {label!r}"
-
-    def test_a_webmail_entry_is_still_not_a_server(self, app):
-        """Greying them out is a presentation change. It must not quietly
-        turn into offering SSH on every entry that has a URL."""
-        items = _items(app, _entry(url="https://mail.example.com/login"))
-        assert all(state == "disabled" for _, state in items), items
+    def test_the_domain_account_case_specifically(self, app):
+        """The report this came from: an entry holding a domain login,
+        no URL, an everyday category. It must be able to start a session
+        and type the host into the dialog."""
+        items = _items(
+            app, _entry(title="domain admin", username=r"corp\eslam"))
+        assert [state for _, state in items] == ["normal", "normal"]
 
 
 class TestBothMenusAgree:

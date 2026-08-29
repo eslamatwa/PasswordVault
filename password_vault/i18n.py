@@ -238,10 +238,6 @@ ARABIC: dict[str, str] = {
     "🌐  Open URL in Browser": "🌐  فتح الرابط في المتصفح",
     "🌐  Open URL + Copy Username": "🌐  فتح الرابط + نسخ اسم المستخدم",
     "🖥️  SSH Session …": "🖥️  جلسة SSH …",
-    "🖥️  SSH Session …    (set a host or IP)":
-        "🖥️  جلسة SSH …    (اضبط مضيفًا أو IP)",
-    "🖥️  RDP Session …    (set a host or IP)":
-        "🖥️  جلسة RDP …    (اضبط مضيفًا أو IP)",
     "🖥️  RDP Session …": "🖥️  جلسة RDP …",
     "✏️  Edit Entry": "✏️  تعديل العنصر",
     "📌  Pin / Unpin": "📌  تثبيت / إلغاء التثبيت",
@@ -270,18 +266,30 @@ ARABIC: dict[str, str] = {
         "ده هيبدأ {n} اتصال منفصل في وقت واحد.",
     "Open them": "افتحهم",
     "{chosen} of {total} selected": "تم اختيار {chosen} من {total}",
+    "From the vault": "من الخزنة",
+    "Type them in": "اكتبهم بنفسك",
+    "Account": "الحساب",
+    "(untitled)": "(بدون عنوان)",
+    "no account": "بدون حساب",
+    "{n} servers typed": "{n} خادم مكتوب",
+    "One server per line:  host   or   user@host   or   user@host:port":
+        "خادم في كل سطر:  host   أو   user@host   أو   user@host:port",
+    "Its username fills in any line that does not name one, and its "
+    "password is what the panel copies.":
+        "اسم المستخدم بتاعه بيتحط في أي سطر ما فيهوش واحد، وكلمة السر "
+        "بتاعته هي اللي اللوحة بتنسخها.",
+    "Nothing in the vault looks like a server.\n\nGive an entry a host "
+    "or IP as its address, or a server category — or type the servers in "
+    "on the other tab.":
+        "مفيش حاجة في الخزنة شكلها خادم.\n\nحط مضيفًا أو IP في خانة "
+        "العنوان لأي مدخل، أو غيّر تصنيفه لتصنيف خوادم — أو اكتب الخوادم "
+        "في التبويب التاني.",
+    "Start a session for every server listed":
+        "ابدأ جلسة لكل خادم في القايمة",
     "Select all": "اختيار الكل",
     "Select none": "إلغاء الاختيار",
     "⚠️ Nothing selected": "⚠️ لم يتم اختيار أي شيء",
     "no host or IP": "لا يوجد مضيف أو عنوان IP",
-    "Start a session for every ticked server":
-        "بدء جلسة لكل خادم محدَّد",
-    "No entries look like a server.\n\nAn entry qualifies when its "
-    "category is a server one, or its address is a bare host, an IP, or "
-    "an ssh:// address.":
-        "لا يوجد أي مدخل يبدو كخادم.\n\nيُقبل المدخل عندما يكون تصنيفه "
-        "من تصنيفات الخوادم، أو يكون عنوانه اسم مضيف مجرّد أو عنوان IP "
-        "أو عنوان ssh://.",
     "💡 Passwords are not copied automatically — a panel opens with one "
     "button per server":
         "💡 كلمات السر لا تُنسخ تلقائياً — تفتح لوحة فيها زر لكل خادم",

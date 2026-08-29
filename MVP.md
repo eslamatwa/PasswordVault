@@ -145,6 +145,41 @@ python -m pyflakes main.py password_vault tests
   Both menus call one helper. The Mini Vault had its own copy of these
   items, which is exactly the drift worth removing.
 
+- **Typed servers, and the menu items that stopped refusing them.** Two
+  changes from the same report, and the same root cause: one domain
+  account opens dozens of machines, and the entry holding it has no host
+  of its own and never will.
+
+  SSH and RDP are live on every entry now. They had been hidden when the
+  entry did not look like a remote host, then greyed out with a reason —
+  which explained the situation and still blocked the case the feature
+  exists for. The host belongs in the dialog, which has a field for it
+  and already refuses to connect without one.
+
+  The batch dialog gained a second tab for typing or pasting a list,
+  `[user@]host[:port]` a line, with a chosen account filling in any line
+  that names no user. Parsing lives in `ui/bulk_targets.py`, apart from
+  the window, because a misread line is not a failed connection — it is a
+  session opened to the wrong machine with a domain account. Blank lines
+  and `#` comments are skipped so a list can be pasted with notes in it,
+  duplicates are dropped, and a bad line is reported by number rather
+  than costing the good ones around it.
+
+  Writing those tests found `root@:22` producing a host of `":22"` with
+  no complaint, which would have been launched. Any colon not followed by
+  a number now refuses the line rather than deferring the failure to ssh,
+  where it surfaces as the machine being unreachable and the typo is
+  nowhere in sight.
+
+- **Client detection stopped depending on where the installer put
+  things.** A dropdown that only lists what it found makes a client
+  installed somewhere unexpected indistinguishable from one that is not
+  installed — reported as "PuTTY is missing" when winget had put its
+  shim on PATH, nowhere near Program Files. PATH is searched now, and
+  `ssh_client_path` in settings covers anything still left out. These
+  tests run without a display, since detection is static and the windowed
+  tests here are the flaky ones.
+
 - **Several SSH sessions at once.** Ten servers meant ten trips through
   the same dialog, re-picking the same client each time. The new dialog
   lists everything the right-click menu would offer SSH for — the same
