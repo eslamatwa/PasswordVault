@@ -65,9 +65,10 @@ from password_vault.ui.widgets import (
     tip, ios_group, ios_field, ios_combo, make_search_bar,
     bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
     ui_font, elide, filter_entries, dialog_header, button_row, CardPool,
-    hotkey_field,
+    hotkey_field, collapsible_group,
     card_signature,
 )
+from password_vault.ui.ssh_key_field import ssh_key_section
 from password_vault.ui.mini_vault import MiniVault
 from password_vault.ui.floating import FloatingWidget
 
@@ -2259,7 +2260,7 @@ class PasswordVault:
                 self._stage_password_for_paste(entry)
                 dlg.destroy()
                 self._launch_ssh(client_path, selected, host, user,
-                                 port, entry.get("title", ""))
+                                 port, entry.get("title", ""), entry)
             else:
                 self._stage_password_for_paste(entry)
                 dlg.destroy()
@@ -2339,7 +2340,8 @@ class PasswordVault:
         return None
 
     @staticmethod
-    def ssh_command(client_name, client_path, host, user, port):
+    def ssh_command(client_name, client_path, host, user, port,
+                    key_path=""):
         """Build the argument list for *client_name*.
 
         Split out from the launch so the exact arguments each client
@@ -2351,6 +2353,11 @@ class PasswordVault:
         MobaXterm, whose `-newtab` takes a single command string that its
         own shell splits; that string is built with `shlex.quote`, which
         is exactly the quoting that shell undoes.
+
+        *key_path* is a private key file. All three clients spell it
+        `-i`, but they do not agree on what may be in it — PuTTY reads
+        only its own .ppk — which `sshkeys.suits` checks before this is
+        reached, because PuTTY's own refusal reads as a broken key.
         """
         port = int(port)
         if client_name == "PuTTY":
@@ -2359,6 +2366,8 @@ class PasswordVault:
                 cmd += ["-l", user]
             if port != 22:
                 cmd += ["-P", str(port)]
+            if key_path:
+                cmd += ["-i", key_path]
             cmd.append(host)
             return cmd
 
@@ -2368,6 +2377,8 @@ class PasswordVault:
                 parts += ["-l", user]
             if port != 22:
                 parts += ["-p", str(port)]
+            if key_path:
+                parts += ["-i", key_path]
             parts.append(host)
             return [client_path, "-newtab",
                     " ".join(shlex.quote(p) for p in parts)]
@@ -2379,8 +2390,62 @@ class PasswordVault:
             cmd += ["-l", user]
         if port != 22:
             cmd += ["-p", str(port)]
+        if key_path:
+            cmd += ["-i", key_path]
         cmd.append(host)
         return ["cmd", "/k"] + cmd
+
+    # A materialised key outlives the launch by this long. The client has
+    # to have read it before it goes, and a client that is still starting
+    # up has not. Deleting it is not optional -- a private key left in
+    # the temp folder is what storing it in the vault was meant to avoid.
+    KEY_FILE_SECONDS = 45
+
+    def key_for(self, entry, client_name):
+        """The key file to pass, if any: ``(path, temporary, problem)``.
+
+        A stored key becomes a file here, locked to this user, and the
+        caller is responsible for removing it. A referenced key is used
+        where it lies.
+        """
+        from password_vault import sshkeys
+
+        source = (entry.get("ssh_key_source") or "none").strip()
+        if source == "file":
+            path = (entry.get("ssh_key_path") or "").strip()
+            if not path:
+                return "", False, ""
+            if not os.path.isfile(path):
+                return "", False, t(
+                    "The key file is not there any more: {path}",
+                    path=path)
+            found = sshkeys.read(path)
+            mismatch = sshkeys.suits(found["kind"], client_name)
+            if mismatch:
+                return "", False, mismatch
+            return path, False, ""
+
+        if source == "stored":
+            stored = entry.get("ssh_key") or ""
+            if not stored:
+                return "", False, ""
+            found = sshkeys.describe(stored)
+            mismatch = sshkeys.suits(found["kind"], client_name)
+            if mismatch:
+                return "", False, mismatch
+            path, problem = sshkeys.materialise(
+                stored, entry.get("title", "key"))
+            if problem:
+                return "", False, problem
+            return path, True, ""
+
+        return "", False, ""
+
+    def forget_key_file(self, path: str) -> None:
+        """Remove a materialised key, after the client has had it."""
+        from password_vault import sshkeys
+
+        sshkeys.discard(path)
 
     def _stage_password_for_paste(self, entry, *,
                                   button=None) -> None:
@@ -2398,23 +2463,55 @@ class PasswordVault:
         """
         configured = self.settings.get("clipboard_clear_seconds", 30)
         window = max(REMOTE_PASTE_SECONDS, configured)
-        self._copy_to_clipboard(entry.get("password", ""), btn=button,
+        # With a key in play the client asks for its passphrase, not the
+        # account password. Staging the password there would put the
+        # wrong secret on the clipboard and leave the prompt unanswered.
+        secret = entry.get("password", "")
+        if (entry.get("ssh_key_source") or "none") != "none":
+            secret = entry.get("ssh_key_passphrase") or ""
+            if not secret:
+                # A key with no passphrase needs nothing pasted, and
+                # putting the account password there would be a secret
+                # exposed for no reason at all.
+                return
+        self._copy_to_clipboard(secret, btn=button,
                                 force_clear_seconds=window)
 
-    def _launch_ssh(self, client_path, client_name, host, user, port, title):
+    def _launch_ssh(self, client_path, client_name, host, user, port,
+                    title, entry=None):
         """Launch an SSH session with the selected client."""
-        cmd = self.ssh_command(client_name, client_path, host, user, port)
+        key_path, temporary, problem = ("", False, "")
+        if entry is not None:
+            key_path, temporary, problem = self.key_for(entry, client_name)
+            if problem:
+                # Refused before launching rather than after: PuTTY's own
+                # complaint about an OpenSSH key reads as a broken key,
+                # and a missing file reads as a refused login.
+                self._alert(t("Could not start the session"), problem)
+                return
+
+        cmd = self.ssh_command(client_name, client_path, host, user, port,
+                               key_path)
         try:
             if client_name == "Windows SSH":
                 subprocess.Popen(
                     cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
             else:
                 subprocess.Popen(cmd)
-            log.info("Launched %s session for %r.", client_name, title)
+            log.info("Launched %s session for %r%s.", client_name, title,
+                     " with a key" if key_path else "")
         except OSError as exc:
             log.warning("Failed to launch SSH client %s: %s",
                         client_name, exc)
             self._alert(t("Could not start the session"), str(exc))
+            if temporary:
+                self.forget_key_file(key_path)
+            return
+
+        if temporary:
+            # Long enough for the client to have read it, and no longer.
+            self.root.after(self.KEY_FILE_SECONDS * 1000,
+                            lambda p=key_path: self.forget_key_file(p))
 
     def launch_ssh_batch(self, targets, client_name, client_path) -> None:
         """Open a session for each of *targets*, one every few hundred ms.
@@ -2449,7 +2546,7 @@ class PasswordVault:
             entry = target["entry"]
             self._launch_ssh(client_path, client_name, target["host"],
                              target["user"], target["port"],
-                             entry.get("title", ""))
+                             entry.get("title", ""), entry)
             if remaining:
                 self._batch_timer = self.root.after(
                     BULK_SSH_STAGGER_MS, step)
@@ -2681,11 +2778,37 @@ class PasswordVault:
         notes_tb = ios_field(g3, "Notes", idx=0, is_textbox=True,
                               height=32, value=notes_val)
 
-        # AUTO-TYPE
-        g4 = ios_group(scroll, "Auto-Type", compact=True)
+        # ── ADVANCED ──
+        # Everything below is per-entry machinery most entries never use:
+        # auto-type matching for one, an SSH key for another. Left open,
+        # it pushed the four fields nearly every entry *does* use into a
+        # minority of the form. Collapsed, with the header naming what is
+        # set inside — hidden is fine, silently in force is not.
         patterns_val = entry.get("match_patterns", "") if is_edit else ""
         if isinstance(patterns_val, (list, tuple)):
             patterns_val = "\n".join(patterns_val)
+        seq_val = (entry.get("autotype_sequence", "") if is_edit else "")
+        general_val = (bool(entry.get("general_account", False))
+                       if is_edit else False)
+        key_source_val = (entry.get("ssh_key_source", "none")
+                          if is_edit else "none")
+        key_path_val = entry.get("ssh_key_path", "") if is_edit else ""
+        stored_key_val = entry.get("ssh_key", "") if is_edit else ""
+
+        def advanced_summary():
+            parts = []
+            if patterns_val.strip() or seq_val.strip() or general_val:
+                parts.append(t("auto-type"))
+            if key_source_val != "none":
+                parts.append(t("SSH key"))
+            return "· " + ", ".join(parts) if parts else ""
+
+        adv_open = bool(
+            patterns_val.strip() or general_val or key_source_val != "none")
+        g4 = collapsible_group(
+            scroll, "Advanced", open_now=adv_open,
+            summary=advanced_summary, compact=True)
+
         patterns_tb = ios_field(
             g4, "Window patterns", idx=0, is_textbox=True, height=44,
             value=patterns_val, ltr=True)
@@ -2693,18 +2816,26 @@ class PasswordVault:
             t("One per line. A window whose title matches gets this "
               "entry: *.corp.local, intranet, 10.0.0.*"))
 
-        seq_val = (entry.get("autotype_sequence", "") if is_edit else "")
         seq_e = ios_field(g4, "Typing order", idx=1,
                           value=seq_val or AUTOTYPE_DEFAULT, ltr=True)
-        tip(seq_e,
-            t("What gets typed, in order. Change it for a site that asks "
-              "for the username and password on separate pages."))
+        seq_hint = ctk.CTkLabel(
+            g4, text="", font=ctk.CTkFont(size=9), text_color=TEXT_TERT,
+            anchor=anchor_start())
+        seq_hint.pack(fill="x", padx=(58, 12), pady=(0, 2))
+
+        def _show_sequence_plain(*_args):
+            # "{USERNAME}{TAB}{PASSWORD}" says nothing until you have read
+            # the syntax. The plain reading sits under it.
+            seq_hint.configure(
+                text=autotype_sequence.describe(seq_e.get().strip()
+                                                or AUTOTYPE_DEFAULT))
+
+        seq_e.bind("<KeyRelease>", _show_sequence_plain, add="+")
+        _show_sequence_plain()
 
         general_row = ctk.CTkFrame(g4, fg_color="transparent")
         general_row.pack(fill="x", padx=12, pady=(2, 8))
-        general_var = ctk.BooleanVar(
-            value=bool(entry.get("general_account", False))
-            if is_edit else False)
+        general_var = ctk.BooleanVar(value=general_val)
         # The label is a separate widget: CTkCheckBox has no `anchor`, so
         # its own text cannot follow the reading direction, and passing
         # one raises rather than being ignored.
@@ -2715,10 +2846,14 @@ class PasswordVault:
             border_width=2).pack(side=side_start())
         ctk.CTkLabel(
             general_row,
-            text=t("A general account — offer it for any window"),
+            text=t("Offer this account for any window, on request"),
             font=ctk.CTkFont(size=11), text_color=TEXT_SEC,
             anchor=anchor_start()).pack(
             side=side_start(), fill="x", expand=True, padx=pad(6, 0))
+
+        key_widgets = ssh_key_section(
+            self, g4, key_source_val, key_path_val, stored_key_val,
+            entry.get("title", "") if is_edit else "")
 
         # Bottom
         bottom = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -2750,6 +2885,12 @@ class PasswordVault:
             url_v = url_e.get().strip()
             patterns = patterns_tb.get("1.0", "end").strip()
             sequence = seq_e.get().strip() or AUTOTYPE_DEFAULT
+            key_source, key_path, stored_key, key_problem = \
+                key_widgets["read"]()
+            if key_problem:
+                err.configure(text=t("⚠️ SSH key: {problem}",
+                                     problem=key_problem))
+                return
             # Refused here rather than at typing time: a sequence that
             # cannot be carried out is only discovered when someone is
             # standing in front of a login box waiting for it.
@@ -2767,7 +2908,10 @@ class PasswordVault:
                               color=col, modified_at=now_iso,
                               match_patterns=patterns,
                               autotype_sequence=sequence,
-                              general_account=general)
+                              general_account=general,
+                              ssh_key_source=key_source,
+                              ssh_key_path=key_path,
+                              ssh_key=stored_key)
             else:
                 self.data["entries"].append({
                     "id": str(uuid.uuid4()), "title": title_v,
@@ -2778,6 +2922,9 @@ class PasswordVault:
                     "match_patterns": patterns,
                     "autotype_sequence": sequence,
                     "general_account": general,
+                    "ssh_key_source": key_source,
+                    "ssh_key_path": key_path,
+                    "ssh_key": stored_key,
                 })
             self._save_guarded()
             dlg.destroy()
@@ -3199,6 +3346,8 @@ LAZY_MODULES = (
     "password_vault.import_1pux",
     "password_vault.import_json",
     "password_vault.import_profiles",
+    "password_vault.sshkeys",
+    "password_vault.ui.ssh_key_field",
     "password_vault.autotype",
     "password_vault.autotype_match",
     "password_vault.autotype_sequence",

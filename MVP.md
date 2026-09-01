@@ -162,6 +162,42 @@ python -m pyflakes main.py password_vault tests
   network drive that is not mounted yet would be silently forgotten
   forever. Detection checks the file when it actually needs it.
 
+- **SSH keys, and an interface plan to fit them into.** Plenty of servers
+  take a key, and the app handled none. An entry can now reference a key
+  file or hold one the app generated; the private half of a generated key
+  lives in the vault, and its public half is derived on demand rather
+  than stored twice.
+
+  The passphrase field appears only when the key actually has one, which
+  needs the key *body* parsed — `ssh-keygen` writes the same header
+  either way. Asking for a passphrase that does not exist teaches people
+  to type their account password into a field nothing reads; staying
+  silent when there is one leaves them at a prompt with an empty
+  clipboard. And with a key in play the clipboard gets the passphrase,
+  not the account password — or nothing at all when the key has none.
+
+  Two things only running the real tools revealed. `ssh-keygen` refuses a
+  key file whose permissions are loose, with "Bad permissions" — which
+  reads as a broken key rather than an ACL, and would have made the
+  stored-key path fail confusingly; materialised keys are now locked to
+  the current user and verified against `ssh-keygen` itself. And
+  generating a key *with* a passphrase needs `bcrypt`, which is not a
+  dependency here, so generated keys have none: the vault is already the
+  protection, and a passphrase on top stops nobody holding a decrypted
+  vault.
+
+  The entry dialog was the blocker. It had reached ten fields across five
+  groups, and these would have added five more, so the interface plan was
+  written first: common fields open, auto-type and SSH keys behind one
+  *Advanced* disclosure whose header names what is set inside. Hidden is
+  acceptable; silently in force is not.
+
+- **A third guard found doing nothing.** The translation-coverage test
+  read a hand-written list of UI files, so `ui/ssh_key_field.py` was
+  simply not checked and shipped twenty-two untranslated strings with the
+  test green. It globs the whole `ui` tree now. That is three this week —
+  a guard that has to be remembered to be updated is not a guard.
+
 - **Auto-Type.** A global shortcut types the username and password into
   whatever window is in front — browser, MobaXterm, RDP, anything. Chosen
   over a browser extension because the work here is servers: an extension

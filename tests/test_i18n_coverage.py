@@ -20,15 +20,17 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 UI_KWARGS = {"text", "placeholder_text", "label"}
 
+# Every UI module, found rather than listed. The list used to be written
+# out by hand with a glob for the dialogs, which meant a new UI file was
+# simply not checked: `ui/ssh_key_field.py` arrived with a dozen
+# untranslated strings and this test stayed green. A guard that has to be
+# remembered is not a guard.
 UI_FILES = [
     REPO / "main.py",
     # security.py renders the strength and age labels, so it holds
     # user-facing text even though it is not a UI module.
     REPO / "password_vault" / "security.py",
-    REPO / "password_vault" / "ui" / "widgets.py",
-    REPO / "password_vault" / "ui" / "floating.py",
-    REPO / "password_vault" / "ui" / "mini_vault.py",
-] + sorted((REPO / "password_vault" / "ui" / "dialogs").glob("*.py"))
+] + sorted((REPO / "password_vault" / "ui").rglob("*.py"))
 
 # Strings that are deliberately not translated, with the reason.
 EXEMPT = {
@@ -141,6 +143,7 @@ class CatalogCoverageTests(unittest.TestCase):
     HELPER_ARGS = {
         "dialog_header": (1,),
         "ios_group": (1,),
+        "collapsible_group": (1,),
         "ios_field": (1,),
         "ios_combo": (1,),
         "stat_row": (2,),

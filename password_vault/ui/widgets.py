@@ -841,3 +841,76 @@ def make_search_bar(parent, search_var, categories, on_category,
     tip(cat_btn, t("Filter by category"))
     return frame
 
+
+
+def collapsible_group(parent, title: str, *, open_now: bool = False,
+                      summary=None, compact: bool = False):
+    """An `ios_group` behind a header that opens and closes.
+
+    Built for the entry dialog, where every feature so far arrived as one
+    more group at the bottom: the four fields nearly every entry uses had
+    become a minority of what was on screen.
+
+    *summary* is called to describe what is set inside, and its result is
+    shown on the header while the section is closed. That part is not
+    decoration. A collapsed section whose settings are silently in force
+    is worse than a long form — the user has to be able to see that
+    something in there is doing something without opening it.
+
+    This is a dialog widget, not a list one. It uses CustomTkinter freely
+    because it is built once when a dialog opens; the entry cards are the
+    hot path and stay on plain Tk.
+    """
+    wrapper = ctk.CTkFrame(parent, fg_color="transparent")
+    wrapper.pack(fill="x", pady=(0, 4 if compact else 8))
+
+    header = ctk.CTkFrame(wrapper, fg_color="transparent")
+    header.pack(fill="x", padx=14, pady=(0, 2))
+
+    state = {"open": bool(open_now)}
+    arrow = ctk.CTkLabel(
+        header, text="▾" if state["open"] else "▸", width=12,
+        font=ctk.CTkFont(size=11), text_color=TEXT_SEC)
+    arrow.pack(side=side_start())
+    caption = ctk.CTkLabel(
+        header, text=t(title).upper(),
+        font=ctk.CTkFont(family="Segoe UI", size=10),
+        text_color=TEXT_SEC, anchor=anchor_start())
+    caption.pack(side=side_start(), padx=pad(4, 0))
+    note = ctk.CTkLabel(
+        header, text="", font=ctk.CTkFont(family="Segoe UI", size=10),
+        text_color=TEXT_TERT, anchor=anchor_start())
+    note.pack(side=side_start(), padx=pad(8, 0))
+
+    group = ctk.CTkFrame(wrapper, fg_color=BG_GROUP, corner_radius=10)
+
+    def refresh_note():
+        text = ""
+        if summary is not None and not state["open"]:
+            try:
+                text = summary() or ""
+            except Exception:  # noqa: BLE001 - a summary must never
+                # take the dialog down with it.
+                text = ""
+        note.configure(text=text)
+
+    def apply():
+        arrow.configure(text="▾" if state["open"] else "▸")
+        if state["open"]:
+            group.pack(fill="x")
+        else:
+            group.pack_forget()
+        refresh_note()
+
+    def toggle(_event=None):
+        state["open"] = not state["open"]
+        apply()
+
+    for widget in (header, arrow, caption, note):
+        widget.bind("<Button-1>", toggle, add="+")
+        widget.configure(cursor="hand2")
+
+    apply()
+    group.refresh_summary = refresh_note
+    group.is_open = lambda: state["open"]
+    return group

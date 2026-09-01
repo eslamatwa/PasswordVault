@@ -174,7 +174,7 @@ class TestLaunching:
         seen = []
         monkeypatch.setattr(
             app, "_launch_ssh",
-            lambda path, name, host, user, port, title:
+            lambda path, name, host, user, port, title, entry=None:
                 seen.append((host, user, port)))
         monkeypatch.setattr(bulk, "show_password_panel",
                             lambda *a, **k: None)

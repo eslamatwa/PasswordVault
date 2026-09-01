@@ -30,7 +30,7 @@ not, and the reasoning behind them:
   from 15.3 s to 0.42 s, and `tools/benchmark_ui.py` is in the repo so the
   claim can be checked. Three other approaches were tried and rejected for
   making no measurable difference.
-- **698 tests, and they find things.** Several real defects here were caught
+- **751 tests, and they find things.** Several real defects here were caught
   by writing tests rather than by planning: a password left on the clipboard
   forever, a batch that kept opening sessions after the vault locked, a
   window guard that could never fire.
@@ -117,6 +117,37 @@ Auto-Type is switched on. They are configurable, and these are the defaults:
   - 🖥️ **SSH Session** — Launch SSH with PuTTY, MobaXterm, or Windows SSH
   - 🖥️ **RDP Session** — Launch Remote Desktop connection
   - ✏️ Edit / 📌 Pin / 🗑️ Delete
+
+### 🔑 SSH Keys
+
+Plenty of servers take a key rather than a password. An entry can point at
+one, or hold one.
+
+- **A key file on this machine** — browsed to and used where it lies. The
+  app never copies it.
+- **A key kept in the vault** — generate one and the private half lives
+  inside the encrypted vault. The public half is shown for pasting into
+  `~/.ssh/authorized_keys`, and can be recovered from the private half at
+  any time rather than being stored twice.
+- **The passphrase box appears only when the key has a passphrase.**
+  Deciding that needs the key body parsed, not its header: `ssh-keygen`
+  writes `-----BEGIN OPENSSH PRIVATE KEY-----` either way. Asking for a
+  passphrase that does not exist teaches people to type their account
+  password into a field nothing will read.
+- **The right secret is staged.** With a key in play the clipboard gets
+  the *passphrase*, not the account password — and if the key has no
+  passphrase, nothing is copied at all, because nothing will be asked
+  for.
+
+A stored key has to become a file for the length of one connection, since
+every client takes a path and none takes bytes. That file is stripped of
+inherited permissions and granted to the current user alone — **OpenSSH
+refuses a key whose permissions are loose, with a "Bad permissions" error
+that reads as a broken key** — and it is deleted 45 seconds later.
+
+Format mismatches are refused before launching rather than after: PuTTY
+reads only its own `.ppk`, and its own complaint about an OpenSSH key
+sounds like the key is corrupt.
 
 ### ⌨️ Auto-Type
 
@@ -469,7 +500,7 @@ python -m pytest tests -q
 python -m pyflakes main.py password_vault tests tools
 ```
 
-**698 tests.** They cover encryption round-trips and schema migration, the
+**751 tests.** They cover encryption round-trips and schema migration, the
 vault shape guard, restore rollback, CSV/Excel import-export fidelity and
 formula escaping, one fixture per supported import format, URL scheme
 validation, password strength/age/duplicate/score logic, generator length

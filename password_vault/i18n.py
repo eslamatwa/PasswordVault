@@ -318,8 +318,6 @@ ARABIC: dict[str, str] = {
     "⚠️ {first} and {second} are both {combo}":
         "⚠️ {first} و {second} الاتنين {combo}",
     "Auto-type shortcut unavailable": "اختصار الكتابة التلقائية غير متاح",
-    "A general account — offer it for any window":
-        "حساب عام — اعرضه لأي نافذة",
     "Click, then press the combination you want.":
         "دوس، وبعدين اضغط التركيبة اللي عايزها.",
     "Types the username and password into whatever window is in front. "
@@ -330,10 +328,6 @@ ARABIC: dict[str, str] = {
     "*.corp.local, intranet, 10.0.0.*":
         "واحد في كل سطر. أي نافذة عنوانها يطابق بتاخد المدخل ده: "
         "‎*.corp.local، intranet، ‎10.0.0.*",
-    "What gets typed, in order. Change it for a site that asks for the "
-    "username and password on separate pages.":
-        "اللي بيتكتب، بالترتيب. غيّره للمواقع اللي بتسأل على اسم "
-        "المستخدم وكلمة السر في صفحتين منفصلتين.",
     "A window running as administrator cannot be typed into — Windows "
     "blocks input from a normal program, and this app deliberately never "
     "asks for admin.":
@@ -344,6 +338,52 @@ ARABIC: dict[str, str] = {
         "ويندوز رفض يدّي التطبيق الاختصارات دي:\n\n{details}\n\n"
         "اختر غيرها من الإعدادات.",
     "⚠️ Typing order: {problem}": "⚠️ ترتيب الكتابة: {problem}",
+    # ── SSH keys ──
+    "SSH key": "مفتاح SSH",
+    "No key — password only": "بدون مفتاح — كلمة سر فقط",
+    "A key file on this machine": "ملف مفتاح على الجهاز ده",
+    "A key kept in the vault": "مفتاح محفوظ في الخزنة",
+    "path to the private key": "مسار المفتاح الخاص",
+    "Browse…": "استعراض…",
+    "Choose a private key": "اختر مفتاحاً خاصاً",
+    "Generate": "وَلِّد",
+    "Public key": "المفتاح العام",
+    "🔑  Public key": "🔑  المفتاح العام",
+    "The half that goes on the server": "النص اللي بيتحط على الخادم",
+    "A key is stored in this entry": "فيه مفتاح محفوظ في المدخل ده",
+    "Nothing stored yet": "مافيش حاجة محفوظة لسه",
+    "Passphrase": "عبارة المرور",
+    "Replace the stored key?": "تستبدل المفتاح المحفوظ؟",
+    "Replace it": "استبدله",
+    "that file does not exist": "الملف ده مش موجود",
+    "auto-type": "كتابة تلقائية",
+    "Offer this account for any window, on request":
+        "اعرض الحساب ده لأي نافذة، لما تطلب",
+    "Add this line to ~/.ssh/authorized_keys on the server. It is not a "
+    "secret.":
+        "حط السطر ده في ‎~/.ssh/authorized_keys على الخادم. مش سر.",
+    "Choose the private key file — the one without .pub":
+        "اختر ملف المفتاح الخاص — اللي من غير ‎.pub",
+    "No key yet. Generate one, and put its public half on the server.":
+        "مافيش مفتاح لسه. ولّد واحد، وحط نصه العام على الخادم.",
+    "Copied to the clipboard when you connect, instead of the password.":
+        "بتتنسخ للحافظة لما تتصل، بدل كلمة السر.",
+    "The key already in this entry is discarded. Any server that trusts "
+    "it will stop accepting this entry until you install the new public "
+    "key there.":
+        "المفتاح اللي في المدخل ده هيترمي. أي خادم واثق فيه هيبطل يقبل "
+        "المدخل ده لحد ما تحط المفتاح العام الجديد عنده.",
+    "The key file is not there any more: {path}":
+        "ملف المفتاح مابقاش موجود: {path}",
+    "choose a key file, or pick \"No key\"":
+        "اختر ملف مفتاح، أو اختر «بدون مفتاح»",
+    "generate a key, or pick \"No key\"":
+        "ولّد مفتاح، أو اختر «بدون مفتاح»",
+    "{kind} key, no passphrase": "مفتاح {kind}، بدون عبارة مرور",
+    "{kind} key, protected by a passphrase":
+        "مفتاح {kind}، محمي بعبارة مرور",
+    "⚠️ SSH key: {problem}": "⚠️ مفتاح SSH: {problem}",
+    "Advanced": "متقدّم",
     "Remote Sessions": "الجلسات البعيدة",
     "Extra SSH Client": "عميل SSH إضافي",
     "full path to an .exe": "المسار الكامل لملف .exe",
