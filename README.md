@@ -30,7 +30,7 @@ not, and the reasoning behind them:
   from 15.3 s to 0.42 s, and `tools/benchmark_ui.py` is in the repo so the
   claim can be checked. Three other approaches were tried and rejected for
   making no measurable difference.
-- **751 tests, and they find things.** Several real defects here were caught
+- **772 tests, and they find things.** Several real defects here were caught
   by writing tests rather than by planning: a password left on the clipboard
   forever, a batch that kept opening sessions after the vault locked, a
   window guard that could never fire.
@@ -500,7 +500,7 @@ python -m pytest tests -q
 python -m pyflakes main.py password_vault tests tools
 ```
 
-**751 tests.** They cover encryption round-trips and schema migration, the
+**772 tests.** They cover encryption round-trips and schema migration, the
 vault shape guard, restore rollback, CSV/Excel import-export fidelity and
 formula escaping, one fixture per supported import format, URL scheme
 validation, password strength/age/duplicate/score logic, generator length

@@ -775,7 +775,13 @@ def ios_field(group, label: str, idx: int = 0, show: str = "",
     return entry
 
 
-def ios_combo(group, label: str, values: list[str], current: str, idx: int = 0):
+def ios_combo(group, label: str, values: list[str], current: str,
+              idx: int = 0, command=None):
+    """*command* is called with the new value when the user picks one.
+
+    Only when they pick: `set()` does not fire it, so pre-filling the
+    dialog cannot be mistaken for a choice the user made.
+    """
     label = t(label)
     if idx > 0:
         ctk.CTkFrame(group, height=1, fg_color=SEPARATOR).pack(
@@ -790,7 +796,8 @@ def ios_combo(group, label: str, values: list[str], current: str, idx: int = 0):
                           fg_color=INPUT_BG, border_width=0, corner_radius=6,
                           button_color=ACCENT, button_hover_color=ACCENT_HOVER,
                           dropdown_fg_color=BG_SEC, text_color=TEXT_PRI,
-                          dropdown_text_color=TEXT_PRI)
+                          dropdown_text_color=TEXT_PRI,
+                          command=command)
     cb.pack(side=side_start(), fill="x", expand=True, padx=pad(4, 0))
     if current:
         cb.set(current)
@@ -910,7 +917,14 @@ def collapsible_group(parent, title: str, *, open_now: bool = False,
         widget.bind("<Button-1>", toggle, add="+")
         widget.configure(cursor="hand2")
 
+    def set_open(value):
+        if state["open"] != bool(value):
+            state["open"] = bool(value)
+            apply()
+
     apply()
     group.refresh_summary = refresh_note
     group.is_open = lambda: state["open"]
+    group.open_it = lambda: set_open(True)
+    group.close_it = lambda: set_open(False)
     return group

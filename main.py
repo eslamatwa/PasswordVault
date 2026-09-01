@@ -1975,6 +1975,15 @@ class PasswordVault:
             command=lambda: self._show_rdp_dialog(entry))
 
     @staticmethod
+    def _server_category(category: str) -> bool:
+        """Whether a category names machines rather than websites.
+
+        The same set the right-click menu uses to decide an entry is a
+        remote host, so "this is a server" means one thing in the app.
+        """
+        return (category or "").strip().lower() in REMOTE_CATEGORIES
+
+    @staticmethod
     def _looks_remote(entry: dict, url: str) -> bool:
         """True when the entry plausibly describes a machine to log into.
 
@@ -2626,6 +2635,10 @@ class PasswordVault:
         scroll.pack(fill="both", expand=True, padx=12, pady=(0, 0))
 
         # IDENTITY
+        # Shared with the category callback below, which runs before the
+        # Advanced section is built if the user is quick.
+        advanced = {"group": None, "nudged": False}
+
         g1 = ios_group(scroll, "Identity", compact=True)
         title_val = entry.get("title", "") if is_edit else ""
         title_e = ios_field(g1, "Title", idx=0, value=title_val,
@@ -2634,7 +2647,26 @@ class PasswordVault:
 
         cat_val = (entry.get("category", cats[0] if cats else "")
                    if is_edit else (cats[0] if cats else ""))
-        cat_cb = ios_combo(g1, "Category", cats, cat_val, idx=1)
+        # Picking a server category is the moment someone is thinking
+        # about a machine, so that is where the key fields should turn
+        # up -- rather than waiting to be found under Advanced by
+        # somebody who does not know they exist.
+        #
+        # Only on a change the user makes, and only once: reopening a
+        # section they deliberately collapsed would be the app arguing
+        # with them.
+        def _category_chosen(value):
+            if not self._server_category(value):
+                return
+            if advanced["nudged"]:
+                return
+            advanced["nudged"] = True
+            group = advanced.get("group")
+            if group is not None:
+                group.open_it()
+
+        cat_cb = ios_combo(g1, "Category", cats, cat_val, idx=1,
+                           command=_category_chosen)
         url_val = entry.get("url", "") if is_edit else ""
         url_e = ios_field(g1, "URL", idx=2, value=url_val, ltr=True,
                            height=30, placeholder="https://example.com")
@@ -2804,10 +2836,15 @@ class PasswordVault:
             return "· " + ", ".join(parts) if parts else ""
 
         adv_open = bool(
-            patterns_val.strip() or general_val or key_source_val != "none")
+            patterns_val.strip() or general_val or key_source_val != "none"
+            # An entry already filed under a server category is one whose
+            # key fields are worth seeing without hunting for them.
+            or self._server_category(cat_val))
+        advanced["nudged"] = adv_open
         g4 = collapsible_group(
             scroll, "Advanced", open_now=adv_open,
             summary=advanced_summary, compact=True)
+        advanced["group"] = g4
 
         patterns_tb = ios_field(
             g4, "Window patterns", idx=0, is_textbox=True, height=44,

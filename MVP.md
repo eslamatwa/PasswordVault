@@ -162,6 +162,23 @@ python -m pyflakes main.py password_vault tests
   network drive that is not mounted yet would be silently forgotten
   forever. Detection checks the file when it actually needs it.
 
+- **The key fields turn up when the category says "server".** Last of the
+  four interface proposals. Picking a server category is the moment
+  somebody is thinking about a machine, so that is where the SSH fields
+  should appear — rather than waiting under *Advanced* to be found by
+  someone who does not know they exist. Which categories count is the
+  same set the right-click menu uses, so "this is a server" means one
+  thing across the app rather than two.
+
+  It opens once. Reopening a section the user deliberately closed is the
+  app arguing with them, and help that repeats itself is an irritation;
+  there is a test named for that rule so it does not get removed as an
+  oversight.
+
+  Wanting to close it from a test showed the widget was half-finished —
+  it had `open_it` and no counterpart. Anything the app can open it
+  should be able to close.
+
 - **SSH keys, and an interface plan to fit them into.** Plenty of servers
   take a key, and the app handled none. An entry can now reference a key
   file or hold one the app generated; the private half of a generated key
