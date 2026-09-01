@@ -3,9 +3,10 @@
 Snapshot of the hardening and polish pass on v3.4: what landed, what is
 deliberately left, and how to verify any of it.
 
-**Verified at the time of writing:** the full suite passes, `pyflakes`
-reports nothing, and every dialog opens in both themes and both languages —
-that last part is now a test rather than a manual pass.
+**Verified at the time of writing:** `pyflakes` reports nothing, and every
+dialog opens in both themes and both languages — that last part is now a test
+rather than a manual pass. 767 tests pass; 5 fail on the unlock path, for one
+underlying reason recorded under *Remaining — smaller* below.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -635,6 +636,25 @@ one and is in *Done* above. The next candidates, none started:
 ---
 
 ## Remaining — smaller, known and deliberate
+
+- **Unlock still freezes the window, despite the worker thread.** Key
+  derivation was moved off the Tk thread so the login window would keep
+  painting, and structurally that worked: `unlock()` returns with `key` still
+  unset and the busy flag raised. It does not deliver the responsiveness it
+  was meant to, because `cryptography` 46.0.5 holds the GIL for the whole of
+  PBKDF2. Measured on Python 3.13.5: during one derivation the main thread
+  got **2** loop iterations, and `Thread.start()` alone blocked for 83ms, so
+  the window stalls for roughly the length of a derivation either way.
+  `tests/test_dialogs_smoke.py::test_unlock_does_not_block_the_ui_thread`
+  fails on this reproducibly — 4 runs, `unlock()` taking 60–70% of a single
+  derivation against a budget of 50%. The test is right and the threshold is
+  not the problem. A real fix means deriving in a separate *process*, which
+  brings PyInstaller `--onefile` and `multiprocessing.freeze_support()` into
+  scope; that is why it is recorded here rather than patched.
+  Four tests in `tests/test_unlock_flow.py` fail alongside it in a full-suite
+  run and pass in isolation: the failing test leaves its worker thread
+  calling `root.after` on a torn-down root. Fixing the isolation is
+  independent of, and much smaller than, the underlying issue.
 
 - **Tk has no bidi algorithm.** Segoe UI handles the joining, but a string
   mixing Arabic with Latin is rendered in logical order rather than
