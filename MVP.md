@@ -162,6 +162,56 @@ python -m pyflakes main.py password_vault tests
   network drive that is not mounted yet would be silently forgotten
   forever. Detection checks the file when it actually needs it.
 
+- **Auto-Type.** A global shortcut types the username and password into
+  whatever window is in front — browser, MobaXterm, RDP, anything. Chosen
+  over a browser extension because the work here is servers: an extension
+  covers the smallest part of it and is the largest, most dangerous thing
+  in the project to build.
+
+  `RegisterHotKey`, never a keyboard hook. Windows reports the one
+  combination asked for and nothing else; a low-level hook would receive
+  every keystroke on the machine, which is what a keylogger is and what
+  antivirus software would call it.
+
+  Five checks stand between the press and the keystrokes: unlocked, not
+  our own window, a confident match, the target window confirmed back in
+  front, and still that window before *every* step. The last is the one
+  easy to omit — a sequence takes a second or two, and the half that lands
+  after an alt-tab is usually the password.
+
+  Per entry: window patterns (`*.corp.local`), a general-account flag, and
+  an editable typing order for logins split across two pages. Refusing is
+  the default everywhere: two accounts on one site open a chooser rather
+  than a guess, and a pattern of only `*` is rejected outright.
+
+  Nine defects came out of reviewing it, four of them silent: an INPUT
+  struct 8 bytes short so `SendInput` sent nothing and returned zero;
+  truncated 64-bit window handles; a sequence that kept typing after the
+  vault locked; and a guard against typing into our own window that could
+  never fire, because Tk wraps its toplevels and `winfo_id()` is never the
+  handle `GetForegroundWindow` reports. Its test passed by feeding in the
+  same wrong value the code compared against.
+
+- **Two things only real use found.** The chooser was built on the app's
+  modal dialog machinery, and a `transient` window drags its owner up —
+  so asking for one password brought the entire vault to the front. And
+  it offered only ranked matches plus general accounts, with its search
+  filtering that list, so on an unmatched window every other password was
+  unreachable. A test asserted that second behaviour, which is worse than
+  the bug: a test that guards a defect makes it look deliberate.
+
+  Both were reported from using the app while 686 tests were green. The
+  fix for the first is a plain always-on-top window; for the second, the
+  rest of the vault behind a divider. Ranking orders the list, it does not
+  decide who is in it.
+
+- **Remembering a window.** Matching reads the window title and nothing
+  else, and some titles never mention what they belong to: an entry at
+  `mail.wavz.com.eg` cannot be connected to a window called
+  `Outlook - Google Chrome`. No better matcher fixes that. The chooser
+  offers to remember the window against the entry instead — one tick, and
+  it types without asking from then on.
+
 - **Typed servers, and the menu items that stopped refusing them.** Two
   changes from the same report, and the same root cause: one domain
   account opens dozens of machines, and the entry holding it has no host

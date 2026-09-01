@@ -6,6 +6,45 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 
 ---
 
+## What sets it apart
+
+Most of this is an ordinary password manager. These are the parts that are
+not, and the reasoning behind them:
+
+- **Built for servers, not just websites.** One domain account opens dozens
+  of machines whose names change every session. SSH and RDP are offered on
+  every entry, several sessions can be opened at once, and window patterns
+  let one entry claim `*.corp.local` — none of which a browser extension
+  would help with.
+- **It never asks for administrator rights.** Not the installer, not the
+  app, not a single feature. The installer offers a per-user install so it
+  does not need them, and where that costs something — a window running
+  elevated cannot be typed into — the limit is documented rather than
+  worked around.
+- **It refuses rather than rewrites.** A username with an unusual character
+  is reported, not silently stripped; a host it cannot parse is named, not
+  guessed at; an auto-type match it is not sure of opens a chooser instead
+  of picking one. Silently changing a credential fails in a way that looks
+  like the server's fault.
+- **The speed is measured, not asserted.** Rendering the entry list went
+  from 15.3 s to 0.42 s, and `tools/benchmark_ui.py` is in the repo so the
+  claim can be checked. Three other approaches were tried and rejected for
+  making no measurable difference.
+- **698 tests, and they find things.** Several real defects here were caught
+  by writing tests rather than by planning: a password left on the clipboard
+  forever, a batch that kept opening sessions after the vault locked, a
+  window guard that could never fire.
+
+  They are also honest about their limits. Three tests in this project have
+  been green while covering nothing — one fed a function the same wrong
+  value the code compared against, one edited a read-only box the save path
+  never reads, one asserted a Windows call succeeded while it silently
+  returned zero. And the two worst auto-type problems were found by using
+  the app, not by running the suite: a chooser that hauled the whole window
+  up, and a vault whose other passwords could not be reached at all.
+
+---
+
 ## ✨ Features
 
 ### 🔒 Security
@@ -62,6 +101,15 @@ A modern, secure, and elegant password manager for Windows — built with **Pyth
 
 Shortcuts and `Ctrl+C/V/X/A` are matched by physical key, so they keep working under a non-Latin keyboard layout (Arabic, Russian, etc.).
 
+Three more work **anywhere in Windows**, not only inside the app, once
+Auto-Type is switched on. They are configurable, and these are the defaults:
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Alt+V` | Type the username and password into the window in front |
+| `Ctrl+Alt+U` | Type the username only |
+| `Ctrl+Alt+P` | Type the password only |
+
 ### 🖱️ Right-Click Context Menu
 - **Full Context Menu** — Right-click any entry card (in main vault or Mini Vault) for quick actions:
   - 📋 Copy Username / 🔑 Copy Password
@@ -69,6 +117,63 @@ Shortcuts and `Ctrl+C/V/X/A` are matched by physical key, so they keep working u
   - 🖥️ **SSH Session** — Launch SSH with PuTTY, MobaXterm, or Windows SSH
   - 🖥️ **RDP Session** — Launch Remote Desktop connection
   - ✏️ Edit / 📌 Pin / 🗑️ Delete
+
+### ⌨️ Auto-Type
+
+Fills the username and password into whatever window is in front — a
+browser, MobaXterm, an RDP session, anything. Off until you switch it on.
+
+- **Three shortcuts**, all configurable by pressing the combination rather
+  than spelling it out: fill both fields, username only, password only. The
+  last two are for sites that ask on separate pages.
+- **Window patterns per entry** — `*.corp.local`, `intranet`, `10.0.0.*`,
+  one per line. This is how a domain account covers machines that were never
+  worth storing individually. A pattern of only `*` is refused; it would
+  claim every window on the machine.
+- **A typing order per entry** — `{USERNAME}{TAB}{PASSWORD}{ENTER}` by
+  default, editable for two-page logins:
+  `{USERNAME}{ENTER}{DELAY 800}{PASSWORD}{ENTER}`. A sequence that cannot
+  be carried out is refused when you save the entry, not when you are
+  standing in front of a login box waiting for it.
+- **It asks when it is not sure.** Two accounts for one site, or a window
+  nothing claims, opens a chooser. A wrong guess does not fail — it types a
+  password into somewhere it does not belong.
+
+The chooser is a small window of its own, always on top, and deliberately
+not one of the app's modal dialogs — those are `transient` children, and a
+transient window drags its owner up with it, so asking for one password
+brought the whole vault to the front. It offers:
+
+- **The whole vault, ranked.** Matches first, then general accounts, then
+  everything else behind a divider. Ranking decides the order, not who is
+  allowed in — a chooser you opened on purpose has to be able to reach any
+  password, including by typing its name.
+- **A line saying what will be typed** — `your username → Tab → your
+  password`, or just the username if that is the shortcut you pressed.
+  Otherwise the only way to find out is to press the button and watch.
+- **Separate copy buttons** for the username and the password, because one
+  button labelled "Copy" does not say which of the two it took.
+- **"Remember this window"**, which is the answer to the case matching
+  cannot solve. An entry called *wavz mail* at `mail.wavz.com.eg` will
+  never match a window called `Outlook - Google Chrome` — nothing in one
+  appears in the other, and no cleverer matcher changes that. Tick the box
+  once and `Outlook` is added to that entry's patterns; from then on it
+  types without asking.
+
+Five checks stand between the key press and the keystrokes: the vault must
+be unlocked, the window must not be the vault's own, an entry must match
+confidently, the window must be confirmed back in front, and it must still
+be the same window before *every* step — a sequence takes a second or two,
+and the half that lands after an alt-tab is usually the password.
+
+**It is not a keylogger, and the code makes that structural.** Windows is
+asked for the one combination via `RegisterHotKey`, so the app is told about
+that key and nothing else. The alternative, a low-level keyboard hook, would
+receive every keystroke on the machine.
+
+**Known limit:** a window running as administrator cannot be typed into.
+Windows blocks input from a normal program, and this app never asks for
+admin. That is a deliberate trade, not an oversight.
 
 ### 🖥️ SSH & RDP Integration
 - **SSH Session Dialog** — Interactive dialog with:
@@ -84,6 +189,22 @@ Shortcuts and `Ctrl+C/V/X/A` are matched by physical key, so they keep working u
   that one is built with `shlex.quote`. A host or username containing a
   shell metacharacter is refused with a message naming the character
   rather than being silently rewritten.
+- **Several sessions at once** — *Open Multiple SSH Sessions* takes the
+  servers from the vault by tickbox, or from a list you type or paste
+  (`[user@]host[:port]`, one per line, `#` comments and blank lines
+  ignored). Pick the client once and the account once; a chosen entry fills
+  in the username on any line that does not name one.
+
+  Launches are spaced a few hundred milliseconds apart rather than fired at
+  once, because a cold-starting MobaXterm drops tabs when ten arrive
+  together. A batch stops if the vault locks partway through.
+
+  **Passwords are not staged automatically here.** One clipboard cannot hold
+  ten, and rotating them on a timer would mean it holding whichever secret
+  happened to be current when you pressed Ctrl+V. A panel stays up with one
+  button per server: click the row for the tab you are in, and that one
+  password goes over under the usual auto-clear.
+
 - **RDP Session Dialog** — Launch Remote Desktop with:
   - Host/IP input (auto-filled from entry URL)
   - Port configuration — there is no username field, because `mstsc` takes no username on its command line and Windows prompts for it itself
@@ -113,6 +234,9 @@ A complete iOS-style settings page with persistent configuration:
 | 🌐 **Appearance** | Language | English or Arabic (العربية) — Arabic mirrors the layout right-to-left |
 | 🎨 **Appearance** | Default Card Color | Choose default color for new entries |
 | 🚀 **Behavior** | Start Minimized | Launch to floating widget instead of full window |
+| 🖥️ **Remote** | Extra SSH Client | Point at a client the automatic search does not find — a portable copy, or one installed somewhere unusual |
+| ⌨️ **Auto-Type** | Enable Auto-Type | Off by default; registers the global shortcuts when on |
+| ⌨️ **Auto-Type** | Three shortcuts | Fill both fields, username only, password only — set by pressing the keys |
 
 Settings are validated on load: a value with the wrong type or outside its allowed range falls back to the default instead of breaking startup.
 
@@ -273,15 +397,24 @@ PasswordVault/
 │   ├── export_import.py             # CSV & Excel export/import helpers
 │   ├── import_json.py               # Bitwarden JSON export reader
 │   ├── import_profiles.py           # Column maps for other password managers
+│   ├── import_1pux.py               # 1Password .1pux archive reader
 │   ├── instance_lock.py             # Single-instance mutex / lock file
+│   ├── autotype.py                  # Auto-type controller: the checks between key and keystroke
+│   ├── autotype_match.py            # Which entry a window is asking for
+│   ├── autotype_sequence.py         # {USERNAME}{TAB}{PASSWORD} parsing
+│   ├── autotype_win.py              # RegisterHotKey + SendInput, the only Windows-specific part
+│   ├── hotkeys.py                   # Reading and validating a shortcut
 │   └── ui/
 │       ├── __init__.py
-│       ├── widgets.py               # Tooltip, iOS-style group/field/combo, search bar
+│       ├── widgets.py               # Tooltip, iOS-style fields, card pool, rounded pills
+│       ├── bulk_targets.py          # Parsing a typed list of servers
 │       ├── mini_vault.py            # Mini Vault (compact always-on-top viewer)
 │       ├── floating.py              # Floating Widget (draggable bubble)
 │       └── dialogs/
 │           ├── __init__.py
 │           ├── about.py             # About dialog
+│           ├── autotype_picker.py   # Choosing an entry when the window is ambiguous
+│           ├── bulk_ssh.py          # Open several SSH sessions at once
 │           ├── backup.py            # Encrypted backup export / restore
 │           ├── change_password.py   # Master password change (threaded re-encrypt)
 │           ├── data_io.py           # CSV / Excel export & import
@@ -289,7 +422,8 @@ PasswordVault/
 │           ├── security_dashboard.py# Score, weak/reused/old lists, breach check
 │           └── trash.py             # Recycle Bin
 ├── tools/
-│   └── benchmark_ui.py             # Entry-list render benchmark
+│   ├── benchmark_ui.py             # Entry-list render benchmark
+│   └── sign.ps1                    # Authenticode signing for a release build
 ├── tests/                           # Unit tests (pytest / unittest)
 ├── icon.ico                         # Application icon
 ├── PasswordVault.spec               # PyInstaller build spec
@@ -331,18 +465,35 @@ PasswordVault/
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q          # unit tests
-python -m pyflakes main.py password_vault tests
+python -m pytest tests -q
+python -m pyflakes main.py password_vault tests tools
 ```
 
-The suite covers encryption round-trips and schema migration, the vault shape
-guard, restore rollback, CSV/Excel import-export fidelity and formula escaping,
-one fixture per supported import format, URL scheme validation, password
-strength/age/duplicate/score logic, generator length handling, settings
-validation, the persisted lockout state, the single-instance lock, and the pure
-UI helpers.
+**698 tests.** They cover encryption round-trips and schema migration, the
+vault shape guard, restore rollback, CSV/Excel import-export fidelity and
+formula escaping, one fixture per supported import format, URL scheme
+validation, password strength/age/duplicate/score logic, generator length
+handling, settings validation, the persisted lockout state, the
+single-instance lock, and the pure UI helpers.
 
-Two of them are worth calling out:
+The suite drives a real Tk application rather than mocking one, so it needs a
+display and takes a few minutes. It keeps to itself while it runs:
+
+- **Windows are placed at +30000+30000**, not hidden. Several tests ask
+  whether a card or a dialog is actually on screen, so they have to stay
+  mapped — they are just mapped where nobody is looking. `focus_force` and
+  `lift` are disabled so nothing takes the keyboard from whatever you are
+  doing.
+- **`APPDATA` is redirected before the package is imported**, which keeps the
+  suite out of `%APPDATA%/PasswordVault` — the vault files *and* `vault.log`.
+  It has to happen at import time, because the log handler is attached when
+  `password_vault` is first imported and the first handler wins.
+
+`tests/test_offscreen.py` and `tests/test_logging.py` hold both of those to
+their word; if a test window appears on your desktop, one of them should be
+failing.
+
+Several are worth calling out:
 
 - **`test_dialogs_smoke.py`** opens every dialog in both themes and both
   languages and asserts each one is actually mapped, not merely constructed.
@@ -356,8 +507,30 @@ Two of them are worth calling out:
   guarantee is asserted rather than assumed: the request carries the
   five-character prefix and never the suffix or the password. A failed
   request must report "unknown", never "safe".
+- **`test_autotype_match.py`** is mostly about refusing. An entry called
+  "es" must not match Files, Notes and Settings; two accounts for one site
+  must not be guessed between; a username alone is never enough evidence. A
+  wrong match does not fail, it types a password somewhere it does not
+  belong.
+- **`test_bulk_targets.py`** parses a typed server list without a window,
+  because a misread line is not a failed connection — it is a session opened
+  to the *wrong machine* with a domain account.
+- **`test_entry_validation.py`** exists because the entry dialog's error
+  messages had never once been triggered by a test, and all three of them
+  crashed instead of appearing. A guard nothing has ever tripped is not a
+  guard.
 
 Tk-dependent tests skip themselves automatically when no display is available.
+
+### A note on tests that pass without testing anything
+
+Three tests in this project have been green while covering nothing at all:
+one fed a function the same wrong value the code compared against, one edited
+a read-only box the save path never reads, and one asserted a Windows call
+succeeded when it had been silently returning zero. None would have been
+caught by reading them. They were found by running the real API and comparing
+the numbers that came back — which is why the manual checklist in
+`MVP.md` is still the gate for anything that types a password.
 
 ---
 
@@ -499,31 +672,6 @@ re-enabled without reinstalling Windows. Do not reach for it to get past
 a build you made five minutes ago. Unblock the single file instead —
 Properties → Unblock, or allow it from the Smart App Control prompt.
 
-
-## Running the tests
-
-```
-python -m pytest tests -q
-```
-
-The suite drives a real Tk application rather than mocking one, so it
-needs a display and takes a few minutes. It keeps to itself while it
-runs:
-
-- **Windows are placed at +30000+30000**, not hidden. Several tests ask
-  whether a card or a dialog is actually on screen, so the windows have
-  to stay mapped — they are just mapped where nobody is looking.
-  `focus_force` and `lift` are disabled for the run so nothing takes the
-  keyboard away from whatever you are doing.
-- **`APPDATA` is redirected before the package is imported.** That is
-  what keeps the suite out of `%APPDATA%/PasswordVault` — both the vault
-  files and `vault.log`. It has to happen at import time, because the log
-  handler is attached when `password_vault` is first imported and the
-  first handler wins for the rest of the process.
-
-`tests/test_offscreen.py` and `tests/test_logging.py` hold both of those
-to their word; if you see a test window on your desktop, one of them
-should be failing.
 
 ## 📝 License
 

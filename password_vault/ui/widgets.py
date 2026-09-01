@@ -15,7 +15,7 @@ from ..i18n import (
 from ..theme import (
     BG_GROUP, BG_SEC, BG_TERT, CARD_HOVER, SEPARATOR, ACCENT, ACCENT_HOVER,
     INPUT_BG, TEXT_PRI, TEXT_SEC, TEXT_TERT, TEXT_QUAT,
-    TT_BG, TT_FG, cat_emoji, menu_style, resolve,
+    RED, TT_BG, TT_FG, cat_emoji, menu_style, resolve,
 )
 
 
@@ -149,6 +149,77 @@ class Tooltip:
 def tip(widget, text: str) -> Tooltip:
     """Attach a tooltip to *widget*."""
     return Tooltip(widget, text)
+
+
+def hotkey_field(parent, value, on_change, width=150, height=28):
+    """A box you press a shortcut into, rather than spell out.
+
+    Reads `event.keycode`, never `event.keysym`. On Windows the keycode
+    is the virtual key -- the same number RegisterHotKey wants -- and it
+    does not move with the keyboard layout. The keysym does: with Arabic
+    active, Ctrl+Alt+V arrives with a keysym of '??', which is the trap
+    this project already hit once with its Ctrl shortcuts.
+
+    Escape puts back what was there. Delete clears it, which is how a
+    shortcut is turned off.
+    """
+    from ..hotkeys import HotkeyError, from_event, is_modifier_key
+
+    state = {"value": value or "", "armed": False}
+    box = ctk.CTkEntry(parent, width=width, height=height,
+                       font=ctk.CTkFont(size=11), fg_color=INPUT_BG,
+                       border_width=0, corner_radius=6,
+                       text_color=TEXT_PRI, justify="center")
+    box.insert(0, state["value"] or t("not set"))
+
+    def render(text, colour=TEXT_PRI):
+        box.configure(state="normal")
+        box.delete(0, "end")
+        box.insert(0, text)
+        box.configure(state="readonly", text_color=resolve(colour))
+
+    render(state["value"] or t("not set"))
+
+    def arm(_event=None):
+        state["armed"] = True
+        render(t("press the keys…"), ACCENT)
+
+    def disarm(_event=None):
+        state["armed"] = False
+        render(state["value"] or t("not set"))
+
+    def key(event):
+        if not state["armed"]:
+            return None
+        if event.keysym == "Escape":
+            disarm()
+            return "break"
+        if event.keysym in ("Delete", "BackSpace"):
+            state["value"] = ""
+            state["armed"] = False
+            render(t("not set"))
+            on_change("")
+            return "break"
+        if is_modifier_key(event.keycode):
+            # Still on the way to a combination.
+            return "break"
+        try:
+            state["value"] = from_event(event.state, event.keycode)
+        except HotkeyError as exc:
+            render(str(exc)[:28], RED)
+            box.after(1800, disarm)
+            return "break"
+        state["armed"] = False
+        render(state["value"])
+        on_change(state["value"])
+        return "break"
+
+    box.bind("<Button-1>", arm, add="+")
+    box.bind("<FocusIn>", arm, add="+")
+    box.bind("<FocusOut>", disarm, add="+")
+    box.bind("<KeyPress>", key, add="+")
+    box.configure(state="readonly")
+    return box
 
 
 def safe_cfg(btn, text: str, fg_color) -> None:

@@ -47,6 +47,13 @@ DEFAULT_SETTINGS: dict = {
     # usual installs; this is for a portable copy, a KiTTY, or anything
     # that lives somewhere no fixed path would guess.
     "ssh_client_path": "",
+    # Auto-type: off until asked for. It registers global shortcuts and
+    # synthesises keystrokes, which is not something to switch on for
+    # someone who did not ask.
+    "autotype_enabled": False,
+    "autotype_hotkey_full": "Ctrl+Alt+V",
+    "autotype_hotkey_username": "Ctrl+Alt+U",
+    "autotype_hotkey_password": "Ctrl+Alt+P",
     "theme": "Dark",
     "language": "English",
     # Whether the "there is no recovery" prompt has been shown, and
@@ -86,6 +93,12 @@ _SPEC: dict[str, tuple] = {
     # should not be silently forgotten. Detection checks the file when
     # it actually needs it.
     "ssh_client_path": (str, lambda v: len(v) <= 512),
+    "autotype_enabled": (bool, None),
+    # An empty shortcut is how one is turned off, so "" has to be
+    # accepted here; whether it can be registered is hotkeys' business.
+    "autotype_hotkey_full": (str, lambda v: len(v) <= 64),
+    "autotype_hotkey_username": (str, lambda v: len(v) <= 64),
+    "autotype_hotkey_password": (str, lambda v: len(v) <= 64),
     "theme": (str, lambda v: v in THEME_MODES),
     "language": (str, lambda v: v in LANGUAGE_CODES),
     "backup_prompted": (bool, None),

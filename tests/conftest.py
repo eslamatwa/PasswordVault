@@ -181,6 +181,7 @@ FAKE_KEY = b"0" * 44
 # the `app_crypto` fixture rather than a fresh import.
 _APP_CRYPTO = None
 _APP_WIDGETS = None
+_APP_AUTOTYPE = None
 
 
 @pytest.fixture(scope="session")
@@ -196,9 +197,10 @@ def _live_app():
 
     import main as main_module
 
-    global _APP_CRYPTO, _APP_WIDGETS
+    global _APP_CRYPTO, _APP_WIDGETS, _APP_AUTOTYPE
     _APP_CRYPTO = sys.modules["password_vault.crypto"]
     _APP_WIDGETS = sys.modules["password_vault.ui.widgets"]
+    _APP_AUTOTYPE = sys.modules["password_vault.autotype"]
 
     vault = main_module.PasswordVault()
     # The real save path needs a working key and a writable vault file;
@@ -256,6 +258,19 @@ def app_widgets(_live_app):
     """
     assert _APP_WIDGETS is not None, "the app was never built"
     return _APP_WIDGETS
+
+
+@pytest.fixture
+def app_autotype(_live_app):
+    """The auto-type module the running app is bound to.
+
+    Same trap as `app_crypto` and `app_widgets`, and this one is easy to
+    miss because the symptom is a test that simply does nothing: patches
+    land on a second copy of the module while the app calls the first,
+    so every check passes vacuously or fails for no visible reason.
+    """
+    assert _APP_AUTOTYPE is not None, "the app was never built"
+    return _APP_AUTOTYPE
 
 
 @pytest.fixture

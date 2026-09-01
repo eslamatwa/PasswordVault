@@ -286,6 +286,64 @@ ARABIC: dict[str, str] = {
         "في التبويب التاني.",
     "Start a session for every server listed":
         "ابدأ جلسة لكل خادم في القايمة",
+    # ── Auto-type ──
+    "Copy the password": "انسخ كلمة السر",
+    "Copy the username": "انسخ اسم المستخدم",
+    "Type it into the window behind this one":
+        "اكتبه في النافذة اللي ورا دي",
+    "will type: {plan}": "هيكتب: {plan}",
+    "each entry's own order": "الترتيب الخاص بكل مدخل",
+    "Remember this window: {pattern}": "افتكر النافذة دي: {pattern}",
+    "Adds it to the entry's window patterns, so this window matches by "
+    "itself next time.":
+        "بيضيفه لأنماط النوافذ بتاعة المدخل، فالنافذة دي تطابق لوحدها "
+        "المرة الجاية.",
+    "everything else": "كل الباقي",
+    "Nothing matches that.": "مفيش حاجة بتطابق ده.",
+    "Enter types the first one. Esc closes.":
+        "Enter بيكتب الأول. Esc بيقفل.",
+    "Auto-Type": "الكتابة التلقائية",
+    "⌨️  Auto-Type": "⌨️  الكتابة التلقائية",
+    "Enable Auto-Type": "تفعيل الكتابة التلقائية",
+    "Fill username + password": "كتابة المستخدم وكلمة السر",
+    "Username only": "اسم المستخدم فقط",
+    "Password only": "كلمة السر فقط",
+    "Window patterns": "أنماط النوافذ",
+    "Typing order": "ترتيب الكتابة",
+    "Type": "اكتب",
+    "Type to filter…": "اكتب للتصفية…",
+    "not set": "غير محدد",
+    "press the keys…": "دوس الزراير…",
+    "into: {window}": "في: {window}",
+    "⚠️ {first} and {second} are both {combo}":
+        "⚠️ {first} و {second} الاتنين {combo}",
+    "Auto-type shortcut unavailable": "اختصار الكتابة التلقائية غير متاح",
+    "A general account — offer it for any window":
+        "حساب عام — اعرضه لأي نافذة",
+    "Click, then press the combination you want.":
+        "دوس، وبعدين اضغط التركيبة اللي عايزها.",
+    "Types the username and password into whatever window is in front. "
+    "Off until you ask for it.":
+        "بيكتب اسم المستخدم وكلمة السر في النافذة اللي قدامك. مقفول "
+        "لحد ما تطلبه.",
+    "One per line. A window whose title matches gets this entry: "
+    "*.corp.local, intranet, 10.0.0.*":
+        "واحد في كل سطر. أي نافذة عنوانها يطابق بتاخد المدخل ده: "
+        "‎*.corp.local، intranet، ‎10.0.0.*",
+    "What gets typed, in order. Change it for a site that asks for the "
+    "username and password on separate pages.":
+        "اللي بيتكتب، بالترتيب. غيّره للمواقع اللي بتسأل على اسم "
+        "المستخدم وكلمة السر في صفحتين منفصلتين.",
+    "A window running as administrator cannot be typed into — Windows "
+    "blocks input from a normal program, and this app deliberately never "
+    "asks for admin.":
+        "النافذة اللي شغالة كمسؤول مايتكتبش فيها — ويندوز بيمنع الإدخال "
+        "من برنامج عادي، والتطبيق ده عن قصد مابيطلبش صلاحيات مسؤول.",
+    "Windows would not give the app these shortcuts:\n\n{details}\n\n"
+    "Pick different ones in Settings.":
+        "ويندوز رفض يدّي التطبيق الاختصارات دي:\n\n{details}\n\n"
+        "اختر غيرها من الإعدادات.",
+    "⚠️ Typing order: {problem}": "⚠️ ترتيب الكتابة: {problem}",
     "Remote Sessions": "الجلسات البعيدة",
     "Extra SSH Client": "عميل SSH إضافي",
     "full path to an .exe": "المسار الكامل لملف .exe",

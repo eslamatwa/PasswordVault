@@ -174,8 +174,12 @@ class TestDialogsMirror:
         app = arabic
         dlg = self._open_entry_dialog(app)
         try:
+            # A label with no text cannot be misaligned, and CTkCheckBox
+            # builds one internally whenever its own text is empty —
+            # which is how the "general account" row is built, because
+            # CTkCheckBox has no `anchor` and cannot mirror its own label.
             stuck = [w.cget("text") for w in _labels(dlg)
-                     if w.cget("anchor") == "w"]
+                     if w.cget("anchor") == "w" and str(w.cget("text")).strip()]
             assert not stuck, f"labels still anchored west: {stuck}"
         finally:
             dlg.destroy()

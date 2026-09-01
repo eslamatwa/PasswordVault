@@ -30,6 +30,11 @@ import pyperclip
 from cryptography.fernet import InvalidToken
 
 from password_vault import instance_lock
+from password_vault import autotype_sequence, hotkeys
+from password_vault.autotype_sequence import (
+    DEFAULT as AUTOTYPE_DEFAULT,
+)
+from password_vault.autotype import AutoType
 from password_vault.i18n import (
     LANGUAGE_VALUES, anchor_end, anchor_start, justify_end, justify_start,
     label_for, ltr_justify, pad, set_language, side_end, side_start, t,
@@ -60,6 +65,7 @@ from password_vault.ui.widgets import (
     tip, ios_group, ios_field, ios_combo, make_search_bar,
     bind_right_click_recursive, add_color_strip, sort_entries_pinned_first,
     ui_font, elide, filter_entries, dialog_header, button_row, CardPool,
+    hotkey_field,
     card_signature,
 )
 from password_vault.ui.mini_vault import MiniVault
@@ -125,6 +131,8 @@ class PasswordVault:
         self._idle_timer = None
         self._session_panel = None
         self._batch_timer = None
+        self.autotype = AutoType(self)
+        self._autotype_warned = False
         self._last_idle_reset = 0.0
         self._main_frame = None
         self._clipboard_timer = None
@@ -467,6 +475,7 @@ class PasswordVault:
         self._idle_timer = None
         self._session_panel = None
         self.cancel_ssh_batch()
+        self.autotype.stop()
         self._unbind_shortcuts()
         if self._main_frame and self._main_frame.winfo_exists():
             self._main_frame.destroy()
@@ -628,6 +637,7 @@ class PasswordVault:
             pass
         self.build_ui()
         self._start_idle_timer()
+        self.restart_autotype(announce=False)
         self._bind_shortcuts()
 
 
@@ -829,6 +839,7 @@ class PasswordVault:
         self.build_ui()
 
         self._start_idle_timer()
+        self.restart_autotype(announce=False)
         self._bind_shortcuts()
         if is_new:
             # After the window is up, not instead of it.
@@ -1266,6 +1277,42 @@ class PasswordVault:
               "Point at another client here — a portable copy, or one "
               "installed somewhere unusual."))
 
+        # ── AUTO-TYPE ──
+        g_auto = ios_group(scroll, "Auto-Type")
+        r_at, lbl_at = setting_row(g_auto, "⌨️", "Enable Auto-Type", idx=0)
+        autotype_on = ctk.BooleanVar(
+            value=s.get("autotype_enabled", False))
+        ctk.CTkSwitch(
+            r_at, text="", variable=autotype_on, width=44,
+            progress_color=ACCENT, button_color=TEXT_PRI).pack(
+            side=side_end())
+        tip(lbl_at,
+            t("Types the username and password into whatever window is "
+              "in front. Off until you ask for it."))
+
+        hotkey_vars = {}
+        rows = (("autotype_hotkey_full", "Fill username + password", 1),
+                ("autotype_hotkey_username", "Username only", 2),
+                ("autotype_hotkey_password", "Password only", 3))
+        for key, label, idx in rows:
+            row, row_label = setting_row(g_auto, "⌨️", label, idx=idx)
+            var = ctk.StringVar(value=s.get(key, ""))
+            hotkey_vars[key] = var
+            hotkey_field(row, var.get(),
+                         lambda value, v=var: v.set(value)).pack(
+                side=side_end())
+            tip(row_label,
+                t("Click, then press the combination you want."))
+
+        ctk.CTkLabel(
+            g_auto,
+            text=t("A window running as administrator cannot be typed "
+                   "into — Windows blocks input from a normal program, "
+                   "and this app deliberately never asks for admin."),
+            font=ctk.CTkFont(size=9), text_color=TEXT_TERT,
+            wraplength=380, justify="left",
+            anchor=anchor_start()).pack(fill="x", padx=14, pady=(2, 8))
+
         # ── PASSWORD GENERATOR ──
         g_gen = ios_group(scroll, "Password Generator Defaults")
 
@@ -1423,6 +1470,28 @@ class PasswordVault:
             self.settings["clipboard_clear_seconds"] = cl_map.get(
                 cl_var.get(), 0)
             self.settings["ssh_client_path"] = client_var.get().strip()
+            self.settings["autotype_enabled"] = bool(autotype_on.get())
+            for key, var in hotkey_vars.items():
+                self.settings[key] = var.get().strip()
+            clash = hotkeys.clashes({
+                t("Fill username + password"):
+                    self.settings["autotype_hotkey_full"],
+                t("Username only"):
+                    self.settings["autotype_hotkey_username"],
+                t("Password only"):
+                    self.settings["autotype_hotkey_password"]})
+            if clash:
+                # Refused, not merely reported. Windows takes the first
+                # registration and rejects the second without a word, so
+                # saving anyway leaves one shortcut permanently dead
+                # while the user believes both were accepted. The dialog
+                # stays open, the same way the entry dialog refuses a
+                # sequence it cannot carry out.
+                first, second, combo = clash
+                err.configure(text=t(
+                    "⚠️ {first} and {second} are both {combo}",
+                    first=first, second=second, combo=combo))
+                return
             self.settings["gen_length"] = gl_var.get()
             self.settings["gen_upper"] = bool(gen_upper.get())
             self.settings["gen_lower"] = bool(gen_lower.get())
@@ -1440,6 +1509,10 @@ class PasswordVault:
             save_settings(self.settings)
             self._reset_idle(force=True)
             dlg.destroy()
+            # Shortcuts are registered with Windows, so a change to them
+            # means unregistering and asking again — settings alone do
+            # nothing until that happens.
+            self.restart_autotype()
             if language_changed:
                 # Tk fixes anchor, justify, pack side and padding when a
                 # widget is created and offers no way to re-flow them, so
@@ -1449,6 +1522,10 @@ class PasswordVault:
 
         bottom = ctk.CTkFrame(dlg, fg_color="transparent")
         bottom.pack(fill="x", padx=14, pady=(0, 12))
+        err = ctk.CTkLabel(bottom, text="", text_color=RED,
+                            font=ctk.CTkFont(size=10), height=14,
+                            wraplength=380)
+        err.pack(fill="x", pady=(0, 4))
         save_btn = ctk.CTkButton(
             bottom, text=t("💾  Save Settings"), height=40,
             font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
@@ -2384,6 +2461,40 @@ class PasswordVault:
         from password_vault.ui.dialogs import bulk_ssh
         self._session_panel = bulk_ssh.show_password_panel(self, targets)
 
+    def show_autotype_picker(self, handle, window_title, which) -> None:
+        from password_vault.ui.dialogs import autotype_picker
+        autotype_picker.show(self, handle, window_title, which)
+
+    def restart_autotype(self, announce: bool = True) -> None:
+        """Re-register the shortcuts, and say so if Windows refused.
+
+        A shortcut another program already owns is refused silently by
+        Windows -- the app looks like it simply ignores the key. Worth a
+        word, but not the same word every time.
+
+        *announce* is True when the user has just changed the setting and
+        is waiting to hear whether it took. It is False on unlock, where
+        the message would otherwise appear every time the vault is opened
+        for the whole life of the conflict -- which is how people learn to
+        dismiss dialogs without reading them, and then miss one that
+        mattered. Unlock still says it once per run.
+        """
+        self.autotype.start()
+        if not self.autotype.failures:
+            self._autotype_warned = False
+            return
+        if not announce and self._autotype_warned:
+            return
+        self._autotype_warned = True
+        details = "\n".join(
+            f"• {name}: {why}"
+            for name, why in self.autotype.failures.items())
+        self._alert(
+            t("Auto-type shortcut unavailable"),
+            t("Windows would not give the app these shortcuts:\n\n"
+              "{details}\n\nPick different ones in Settings.",
+              details=details))
+
     def cancel_ssh_batch(self) -> None:
         """Drop any queued launches from a batch still playing out."""
         if self._batch_timer:
@@ -2570,6 +2681,45 @@ class PasswordVault:
         notes_tb = ios_field(g3, "Notes", idx=0, is_textbox=True,
                               height=32, value=notes_val)
 
+        # AUTO-TYPE
+        g4 = ios_group(scroll, "Auto-Type", compact=True)
+        patterns_val = entry.get("match_patterns", "") if is_edit else ""
+        if isinstance(patterns_val, (list, tuple)):
+            patterns_val = "\n".join(patterns_val)
+        patterns_tb = ios_field(
+            g4, "Window patterns", idx=0, is_textbox=True, height=44,
+            value=patterns_val, ltr=True)
+        tip(patterns_tb,
+            t("One per line. A window whose title matches gets this "
+              "entry: *.corp.local, intranet, 10.0.0.*"))
+
+        seq_val = (entry.get("autotype_sequence", "") if is_edit else "")
+        seq_e = ios_field(g4, "Typing order", idx=1,
+                          value=seq_val or AUTOTYPE_DEFAULT, ltr=True)
+        tip(seq_e,
+            t("What gets typed, in order. Change it for a site that asks "
+              "for the username and password on separate pages."))
+
+        general_row = ctk.CTkFrame(g4, fg_color="transparent")
+        general_row.pack(fill="x", padx=12, pady=(2, 8))
+        general_var = ctk.BooleanVar(
+            value=bool(entry.get("general_account", False))
+            if is_edit else False)
+        # The label is a separate widget: CTkCheckBox has no `anchor`, so
+        # its own text cannot follow the reading direction, and passing
+        # one raises rather than being ignored.
+        ctk.CTkCheckBox(
+            general_row, text="", width=24, checkbox_width=20,
+            checkbox_height=20, variable=general_var, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, corner_radius=5,
+            border_width=2).pack(side=side_start())
+        ctk.CTkLabel(
+            general_row,
+            text=t("A general account — offer it for any window"),
+            font=ctk.CTkFont(size=11), text_color=TEXT_SEC,
+            anchor=anchor_start()).pack(
+            side=side_start(), fill="x", expand=True, padx=pad(6, 0))
+
         # Bottom
         bottom = ctk.CTkFrame(dlg, fg_color="transparent")
         bottom.pack(fill="x", padx=14, pady=(0, 10))
@@ -2579,10 +2729,15 @@ class PasswordVault:
         err.pack(pady=(0, 2))
 
         def save():
-
-            t = title_e.get().strip()
+            # Not `t`: that is the translation function, and binding it
+            # here made every validation message in this function a call
+            # on a string. Leaving the title empty and pressing Save
+            # raised `'str' object is not callable` instead of saying
+            # "Title is required" — the two error paths that exist to
+            # catch a mistake were themselves the crash.
+            title_v = title_e.get().strip()
             p = pass_e.get().strip()
-            if not t:
+            if not title_v:
                 err.configure(text=t("⚠️ Title is required"))
                 return
             if not p:
@@ -2593,19 +2748,36 @@ class PasswordVault:
             n = notes_tb.get("1.0", "end").strip()
             col = current_color.get()
             url_v = url_e.get().strip()
+            patterns = patterns_tb.get("1.0", "end").strip()
+            sequence = seq_e.get().strip() or AUTOTYPE_DEFAULT
+            # Refused here rather than at typing time: a sequence that
+            # cannot be carried out is only discovered when someone is
+            # standing in front of a login box waiting for it.
+            problem = autotype_sequence.validate(sequence)
+            if problem:
+                err.configure(text=t("⚠️ Typing order: {problem}",
+                                     problem=problem))
+                return
+            general = bool(general_var.get())
             now_iso = datetime.datetime.now().isoformat()
 
             if is_edit:
-                entry.update(title=t, username=u, password=p,
+                entry.update(title=title_v, username=u, password=p,
                               url=url_v, category=c, notes=n,
-                              color=col, modified_at=now_iso)
+                              color=col, modified_at=now_iso,
+                              match_patterns=patterns,
+                              autotype_sequence=sequence,
+                              general_account=general)
             else:
                 self.data["entries"].append({
-                    "id": str(uuid.uuid4()), "title": t,
+                    "id": str(uuid.uuid4()), "title": title_v,
                     "username": u, "password": p, "url": url_v,
                     "category": c, "notes": n, "color": col,
                     "pinned": False, "created_at": now_iso,
                     "modified_at": now_iso,
+                    "match_patterns": patterns,
+                    "autotype_sequence": sequence,
+                    "general_account": general,
                 })
             self._save_guarded()
             dlg.destroy()
@@ -2804,6 +2976,7 @@ class PasswordVault:
         except tk.TclError:
             pass
         self.cancel_ssh_batch()
+        self.autotype.stop()
         if self.mini_vault:
             try:
                 self.mini_vault.destroy()
@@ -3026,6 +3199,11 @@ LAZY_MODULES = (
     "password_vault.import_1pux",
     "password_vault.import_json",
     "password_vault.import_profiles",
+    "password_vault.autotype",
+    "password_vault.autotype_match",
+    "password_vault.autotype_sequence",
+    "password_vault.autotype_win",
+    "password_vault.hotkeys",
     "password_vault.instance_lock",
     "password_vault.security",
     "password_vault.settings",
@@ -3034,6 +3212,7 @@ LAZY_MODULES = (
     "password_vault.ui.mini_vault",
     "password_vault.ui.widgets",
     "password_vault.ui.dialogs.about",
+    "password_vault.ui.dialogs.autotype_picker",
     "password_vault.ui.dialogs.backup",
     "password_vault.ui.dialogs.bulk_ssh",
     "password_vault.ui.dialogs.change_password",
