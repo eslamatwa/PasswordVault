@@ -3,10 +3,11 @@
 Snapshot of the hardening and polish pass on v3.4: what landed, what is
 deliberately left, and how to verify any of it.
 
-**Verified at the time of writing:** `pyflakes` reports nothing, and every
-dialog opens in both themes and both languages — that last part is now a test
-rather than a manual pass. 767 tests pass; 5 fail on the unlock path, for one
-underlying reason recorded under *Remaining — smaller* below.
+**Verified at the time of writing:** 772 tests pass, `pyflakes` reports
+nothing, and every dialog opens in both themes and both languages — that last
+part is now a test rather than a manual pass. Whether unlock actually frees
+the window turns out to depend on the `cryptography` version; see *Remaining
+— smaller* below, where both measurements are recorded.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -637,20 +638,42 @@ one and is in *Done* above. The next candidates, none started:
 
 ## Remaining — smaller, known and deliberate
 
-- **Unlock still freezes the window, despite the worker thread.** Key
-  derivation was moved off the Tk thread so the login window would keep
-  painting, and structurally that worked: `unlock()` returns with `key` still
-  unset and the busy flag raised. It does not deliver the responsiveness it
-  was meant to, because `cryptography` 46.0.5 holds the GIL for the whole of
-  PBKDF2. Measured on Python 3.13.5: during one derivation the main thread
-  got **2** loop iterations, and `Thread.start()` alone blocked for 83ms, so
-  the window stalls for roughly the length of a derivation either way.
-  `tests/test_dialogs_smoke.py::test_unlock_does_not_block_the_ui_thread`
-  fails on this reproducibly — 4 runs, `unlock()` taking 60–70% of a single
-  derivation against a budget of 50%. The test is right and the threshold is
-  not the problem. A real fix means deriving in a separate *process*, which
-  brings PyInstaller `--onefile` and `multiprocessing.freeze_support()` into
-  scope; that is why it is recorded here rather than patched.
+- **Whether unlock frees the window depends on the `cryptography`
+  version.** Key derivation was moved off the Tk thread so the login window
+  would keep painting. Structurally that landed everywhere: `unlock()`
+  returns with `key` still unset and the busy flag raised, which is what
+  `test_unlock_does_not_block_the_ui_thread` asserts, and it passes.
+
+  Whether it *delivers* anything is a separate question, and the two
+  measurements taken so far disagree:
+
+  | | cryptography 46.0.5, Python 3.13.5 | cryptography 50.0.1, Python 3.12.13 |
+  |---|---|---|
+  | `Thread.start()` returned after | 83 ms | **2 ms** |
+  | main-thread iterations during a derivation | 2 | **337,295** |
+  | verdict | GIL held throughout | GIL released |
+
+  On the versions this repo currently pins, the worker does free the main
+  thread and the window keeps painting. On 46.0.5 it did not, and the
+  window stalled for roughly the length of a derivation either way.
+
+  Both numbers are real; neither cancels the other. What it means in
+  practice is that the responsiveness this buys is **not guaranteed by our
+  code** — it depends on whether the library releases the GIL, which is
+  not part of its contract and has evidently changed between versions.
+
+  Worth knowing before "fixing" it: the structural test passing is not
+  evidence the window is responsive. It asserts the handler returned
+  early, which is true in both columns above. A test that would catch the
+  bad column has to measure the main thread's progress, and an earlier
+  attempt at exactly that was removed from this suite for failing about
+  one run in five on a loaded machine — a timing budget is the right idea
+  and the wrong instrument.
+
+  If it needs to be guaranteed rather than inherited, the answer is
+  deriving in a separate *process*, which brings PyInstaller `--onefile`
+  and `multiprocessing.freeze_support()` into scope. That is a real piece
+  of work, and it is recorded rather than started.
   Four tests in `tests/test_unlock_flow.py` fail alongside it in a full-suite
   run and pass in isolation: the failing test leaves its worker thread
   calling `root.after` on a torn-down root. Fixing the isolation is
