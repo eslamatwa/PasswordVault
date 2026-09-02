@@ -183,6 +183,19 @@ class AutoType:
 
         entries = self.app.data.get("entries", [])
         entry = choose(title, entries)
+
+        if entry is None:
+            # Nothing matched the title -- but if a session was opened
+            # from an entry moments ago, the user already said which one
+            # they meant. Asking again is a step they have earned the
+            # right not to take, and a terminal's title rarely mentions
+            # the entry it was opened from.
+            recent = getattr(self.app, "recent_session_entry", None)
+            entry = recent() if callable(recent) else None
+            if entry is not None:
+                log.info("Auto-type using the entry this session was "
+                         "opened with.")
+
         if entry is None:
             self.app.show_autotype_picker(handle, title, which)
             return

@@ -384,6 +384,31 @@ ARABIC: dict[str, str] = {
         "مفتاح {kind}، محمي بعبارة مرور",
     "⚠️ SSH key: {problem}": "⚠️ مفتاح SSH: {problem}",
     "Advanced": "متقدّم",
+    # ── Host key verification ──
+    "Verify host keys": "التحقق من مفاتيح الخوادم",
+    "Record this host key?": "تسجّل مفتاح الخادم ده؟",
+    "Record and connect": "سجّله واتصل",
+    "The host key has changed": "مفتاح الخادم اتغيّر",
+    "You have not connected here before.": "ماتصلتش بالخادم ده قبل كده.",
+    "Your SSH client has connected here before.":
+        "عميل SSH بتاعك اتصل بالخادم ده قبل كده.",
+    "Fetch the server's key before connecting and refuse if it has "
+    "changed. Costs a moment per connection, and needs outbound port 22.":
+        "بيجيب مفتاح الخادم قبل الاتصال ويرفض لو اتغيّر. بياخد لحظة في كل "
+        "اتصال، ومحتاج منفذ 22 مفتوح للخارج.",
+    "This host is offering a different key from the one recorded."
+    "\n\nrecorded: {recorded}\noffered:  {offered}\n\n"
+    "Either the server was rebuilt, or something is answering in "
+    "its place.":
+        "الخادم ده بيقدّم مفتاح مختلف عن المسجّل."
+        "\n\nالمسجّل: {recorded}\nالمقدّم:  {offered}\n\n"
+        "يا إما الخادم اتعمله إعادة تنصيب، يا إما فيه حاجة بترد مكانه.",
+    "{host} offers:\n\n{fp}\n\n{note}\n\nRecording it means a "
+    "later change will be refused instead of passing unnoticed.":
+        "{host} بيقدّم:\n\n{fp}\n\n{note}\n\nتسجيله معناه إن أي "
+        "تغيير بعد كده هيترفض بدل ما يعدّي من غير ما حد ياخد باله.",
+    "⚠️ Could not check the host key: {why}":
+        "⚠️ ماقدرناش نتحقق من مفتاح الخادم: {why}",
     "Remote Sessions": "الجلسات البعيدة",
     "Extra SSH Client": "عميل SSH إضافي",
     "full path to an .exe": "المسار الكامل لملف .exe",

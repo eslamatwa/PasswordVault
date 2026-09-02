@@ -47,6 +47,10 @@ DEFAULT_SETTINGS: dict = {
     # usual installs; this is for a portable copy, a KiTTY, or anything
     # that lives somewhere no fixed path would guess.
     "ssh_client_path": "",
+    # Off by default: it costs a round trip before every
+    # connection, and on a network that blocks outbound 22
+    # it would add a timeout to each one.
+    "verify_host_keys": False,
     # Auto-type: off until asked for. It registers global shortcuts and
     # synthesises keystrokes, which is not something to switch on for
     # someone who did not ask.
@@ -93,6 +97,7 @@ _SPEC: dict[str, tuple] = {
     # should not be silently forgotten. Detection checks the file when
     # it actually needs it.
     "ssh_client_path": (str, lambda v: len(v) <= 512),
+    "verify_host_keys": (bool, None),
     "autotype_enabled": (bool, None),
     # An empty shortcut is how one is turned off, so "" has to be
     # accepted here; whether it can be registered is hotkeys' business.

@@ -132,6 +132,7 @@ class PasswordVault:
         self._idle_timer = None
         self._session_panel = None
         self._batch_timer = None
+        self._recent_session = None
         self.autotype = AutoType(self)
         self._autotype_warned = False
         self._last_idle_reset = 0.0
@@ -1278,6 +1279,19 @@ class PasswordVault:
               "Point at another client here — a portable copy, or one "
               "installed somewhere unusual."))
 
+        r_hk, lbl_hk = setting_row(g_remote, "🔑", "Verify host keys",
+                                   idx=1)
+        verify_hosts = ctk.BooleanVar(
+            value=s.get("verify_host_keys", False))
+        ctk.CTkSwitch(
+            r_hk, text="", variable=verify_hosts, width=44,
+            progress_color=ACCENT, button_color=TEXT_PRI).pack(
+            side=side_end())
+        tip(lbl_hk,
+            t("Fetch the server's key before connecting and refuse if it "
+              "has changed. Costs a moment per connection, and needs "
+              "outbound port 22."))
+
         # ── AUTO-TYPE ──
         g_auto = ios_group(scroll, "Auto-Type")
         r_at, lbl_at = setting_row(g_auto, "⌨️", "Enable Auto-Type", idx=0)
@@ -1471,6 +1485,7 @@ class PasswordVault:
             self.settings["clipboard_clear_seconds"] = cl_map.get(
                 cl_var.get(), 0)
             self.settings["ssh_client_path"] = client_var.get().strip()
+            self.settings["verify_host_keys"] = bool(verify_hosts.get())
             self.settings["autotype_enabled"] = bool(autotype_on.get())
             for key, var in hotkey_vars.items():
                 self.settings[key] = var.get().strip()
@@ -2266,20 +2281,16 @@ class PasswordVault:
                 if not client_path:
                     err.configure(text=t("⚠️ SSH client not found"))
                     return
-                self._stage_password_for_paste(entry)
-                dlg.destroy()
-                self._launch_ssh(client_path, selected, host, user,
-                                 port, entry.get("title", ""), entry)
+                def go():
+                    self._stage_password_for_paste(entry)
+                    dlg.destroy()
+                    self._launch_ssh(client_path, selected, host, user,
+                                     port, entry.get("title", ""), entry)
+
+                self._with_host_check(entry, host, port, go, err)
             else:
-                self._stage_password_for_paste(entry)
                 dlg.destroy()
-                try:
-                    rdp_target = (f"{host}:{port}"
-                                  if port != default_port else host)
-                    subprocess.Popen(["mstsc", f"/v:{rdp_target}"])
-                except OSError as exc:
-                    log.warning("Failed to launch RDP: %s", exc)
-                    self._alert(t("Could not start the session"), str(exc))
+                self.launch_rdp(entry, host, port, default_port)
 
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 12))
@@ -2450,11 +2461,184 @@ class PasswordVault:
 
         return "", False, ""
 
+    def _with_host_check(self, entry, host, port, proceed, err=None):
+        """Run *proceed* unless the host is offering an unexpected key.
+
+        Verifying is optional and off by default. It costs a round trip
+        before every connection, and a user on a network that blocks
+        outbound 22 to their own jump box would otherwise wait for a
+        timeout every time.
+        """
+        from password_vault import hostkeys
+
+        if not self.settings.get("verify_host_keys", False):
+            proceed()
+            return
+
+        verdict, detail = self.check_host_key(entry, host, port)
+
+        if verdict == hostkeys.MATCH:
+            proceed()
+            return
+
+        if verdict == hostkeys.UNREACHABLE:
+            # Could not check. Say so and carry on -- refusing here would
+            # block every connection on a network that blocks keyscan.
+            log.info("Host key not checked for %s: %s", host, detail)
+            if err is not None:
+                err.configure(text=t("⚠️ Could not check the host key: "
+                                     "{why}", why=detail))
+            proceed()
+            return
+
+        if verdict == hostkeys.UNKNOWN:
+            fingerprint = detail
+            seen_before = hostkeys.in_known_hosts(host, port)
+            note = (t("Your SSH client has connected here before.")
+                    if seen_before else
+                    t("You have not connected here before."))
+            self._confirm(
+                t("Record this host key?"),
+                t("{host} offers:\n\n{fp}\n\n{note}\n\nRecording it "
+                  "means a later change will be refused instead of "
+                  "passing unnoticed.",
+                  host=host, fp=fingerprint, note=note),
+                icon="🔑", confirm_text=t("Record and connect"),
+                on_confirm=lambda _dlg=None: (
+                    self.remember_host_key(entry, fingerprint), proceed()),
+                window_title=t("Record this host key?"))
+            return
+
+        # MISMATCH. Refused outright: this is the case the check exists
+        # for, and a warning that can be clicked through is no use.
+        self._alert(t("The host key has changed"), detail)
+        log.warning("Refused a session to %s: host key mismatch.", host)
+
+    # How long after opening a session the app still assumes a password
+    # shortcut is meant for it. Long enough to cover a client starting
+    # up and a login prompt appearing; short enough that it is not still
+    # guessing an hour later.
+    SESSION_MEMORY_SECONDS = 180
+
+    def remember_session_entry(self, entry) -> None:
+        """Note which entry a session was just opened with.
+
+        The shortcut afterwards should not have to work out what the user
+        meant: they said so when they picked the entry and pressed
+        Connect. Matching a window title is a fallback for windows the
+        app did not open, not the first resort for one it did.
+        """
+        self._recent_session = (entry, time.time())
+
+    def recent_session_entry(self):
+        """The entry a session was opened with just now, or None."""
+        recent = getattr(self, "_recent_session", None)
+        if not recent:
+            return None
+        entry, when = recent
+        if time.time() - when > self.SESSION_MEMORY_SECONDS:
+            return None
+        # A locked vault has nothing to offer, and the entry is a stale
+        # reference into data that has been dropped.
+        if self.key is None or not self.data:
+            return None
+        if entry not in self.data.get("entries", []):
+            return None
+        return entry
+
+    def check_host_key(self, entry, host, port):
+        """Is this the machine we reached last time?
+
+        Returns ``(verdict, detail)``. The app cannot verify during the
+        session -- the client makes the connection, not us -- so the key
+        is fetched beforehand with `ssh-keyscan`, which needs no
+        credentials because it asks for the key the server offers anyone.
+
+        The distinction that matters is between "different" and "could
+        not check". A network that blocks port 22, or an ssh-keyscan too
+        old for the server's key exchange, is not evidence of anything;
+        treating it as a refusal makes the check something people switch
+        off, which is worse than not having it.
+        """
+        from password_vault import hostkeys
+
+        recorded = (entry.get("ssh_host_fingerprint") or "").strip()
+        offered, problem = hostkeys.scan(host, port)
+        if problem:
+            return hostkeys.UNREACHABLE, problem
+        verdict = hostkeys.compare(recorded, offered)
+        if verdict == hostkeys.MISMATCH:
+            return verdict, t(
+                "This host is offering a different key from the one "
+                "recorded.\n\nrecorded: {recorded}\noffered:  {offered}"
+                "\n\nEither the server was rebuilt, or something is "
+                "answering in its place.",
+                recorded=recorded, offered=hostkeys.preferred(offered))
+        if verdict == hostkeys.UNKNOWN:
+            return verdict, hostkeys.preferred(offered)
+        return verdict, ""
+
+    def remember_host_key(self, entry, fingerprint) -> None:
+        """Record a fingerprint against an entry and save."""
+        entry["ssh_host_fingerprint"] = fingerprint
+        entry["modified_at"] = datetime.datetime.now().isoformat()
+        self._save_guarded()
+        log.info("Recorded a host key for %r.", entry.get("title", ""))
+
     def forget_key_file(self, path: str) -> None:
         """Remove a materialised key, after the client has had it."""
         from password_vault import sshkeys
 
         sshkeys.discard(path)
+
+    def launch_rdp(self, entry, host, port, default_port=3389) -> None:
+        """Open Remote Desktop, signed in where possible.
+
+        `mstsc` takes no password on its command line, by design. What it
+        does is read `TERMSRV/<host>` out of the Windows Credential
+        Manager -- so the credential is written there, the client is
+        launched, and it is taken back out again shortly afterwards.
+
+        When that cannot be done, the old behaviour stands: the password
+        goes to the clipboard and Windows asks for it. Falling back
+        matters more than the convenience does, because the alternative
+        is a connection that simply does not open.
+        """
+        from password_vault import rdpcreds
+
+        username = (entry.get("username") or "").strip()
+        password = entry.get("password") or ""
+        stored = ""
+
+        if rdpcreds.available() and username and password:
+            problem = rdpcreds.write(host, username, password)
+            if problem:
+                log.info("RDP credential not stored (%s); "
+                         "falling back to the clipboard.", problem)
+            else:
+                stored = host
+
+        if not stored:
+            self._stage_password_for_paste(entry)
+
+        target = f"{host}:{port}" if port != default_port else host
+        try:
+            subprocess.Popen(["mstsc", f"/v:{target}"])
+            log.info("Launched RDP for %r%s.", entry.get("title", ""),
+                     " with a stored credential" if stored else "")
+        except OSError as exc:
+            log.warning("Failed to launch RDP: %s", exc)
+            self._alert(t("Could not start the session"), str(exc))
+            if stored:
+                rdpcreds.delete(stored)
+            return
+
+        if stored:
+            # Long enough for mstsc to have read it, and no longer: this
+            # is a password sitting in another process's store.
+            self.root.after(
+                rdpcreds.CREDENTIAL_SECONDS * 1000,
+                lambda h=stored: rdpcreds.delete(h))
 
     def _stage_password_for_paste(self, entry, *,
                                   button=None) -> None:
@@ -2516,6 +2700,9 @@ class PasswordVault:
             if temporary:
                 self.forget_key_file(key_path)
             return
+
+        if entry is not None:
+            self.remember_session_entry(entry)
 
         if temporary:
             # Long enough for the client to have read it, and no longer.
@@ -3383,6 +3570,8 @@ LAZY_MODULES = (
     "password_vault.import_1pux",
     "password_vault.import_json",
     "password_vault.import_profiles",
+    "password_vault.hostkeys",
+    "password_vault.rdpcreds",
     "password_vault.sshkeys",
     "password_vault.ui.ssh_key_field",
     "password_vault.autotype",

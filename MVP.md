@@ -181,6 +181,46 @@ python -m pyflakes main.py password_vault tests
   it had `open_it` and no counterpart. Anything the app can open it
   should be able to close.
 
+- **Host key verification.** The app opens dozens of sessions with one
+  domain account and never checked that the machine answering was the one
+  that answered last time. It cannot verify during the session -- the
+  client makes the connection -- so the key is fetched beforehand with
+  `ssh-keyscan`, which needs no credentials, and compared with what the
+  entry recorded. Match connects silently; unknown offers to record it;
+  a change is refused outright.
+
+  The distinction the design turns on is between *changed* and *could not
+  check*. Found while testing: `ssh-keyscan` failed against github.com
+  because the bundled OpenSSH 9.5 is older than the key exchange that
+  server wants -- nothing to do with security. Had that counted as a
+  refusal, the feature would be unusable on the first day, and a safety
+  check people switch off protects nobody. It is off by default and
+  `known_hosts` is read, never written: that file belongs to the SSH
+  client.
+
+  The fingerprint calculation was checked against the one GitLab
+  publishes, not against itself.
+
+- **Remote Desktop signs itself in.** `mstsc` takes no password on its
+  command line by design; it reads `TERMSRV/<host>` from the Windows
+  Credential Manager. So the credential is written there, the client is
+  launched, and it is removed thirty seconds later -- through
+  `CredWriteW` rather than `cmdkey`, because `cmdkey /pass:` puts the
+  password in a command line that every process on the machine can read.
+  Session-scoped, so a crash cannot leave it past logoff, and the delete
+  is verified rather than assumed. Without a username it falls back to
+  the clipboard: Windows asks anyway, and a session that opens and asks
+  beats one that does not open.
+
+- **The shortcut stops asking who you meant.** Reported as "the small
+  window shouldn't have to appear and the user press Type — those are
+  extra steps", and that was right. The app already knew which entry the
+  session was opened with, because the user picked it and pressed
+  Connect; it was throwing that away and trying to infer it again from a
+  window title, which for MobaXterm rarely mentions the entry. It
+  remembers for three minutes, and forgets on lock, on deletion, and on
+  timeout.
+
 - **SSH keys, and an interface plan to fit them into.** Plenty of servers
   take a key, and the app handled none. An entry can now reference a key
   file or hold one the app generated; the private half of a generated key
