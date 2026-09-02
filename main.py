@@ -2343,31 +2343,99 @@ class PasswordVault:
         ten passwords, and cycling them on a timer would mean whichever
         secret happened to be current when the user pressed Ctrl+V. The
         panel that opens afterwards copies one on request instead.
+
+        The stagger alone was not enough, and the way it failed is worth
+        writing down. MobaXterm serves every tab from one process, so
+        after the first launch each `-newtab` is a handoff to an instance
+        that is expected to be running. `Popen` succeeds either way. Ask
+        for four sessions while MobaXterm is closed and the first launch
+        starts it -- which takes seconds -- while handoffs two, three and
+        four arrive at nothing and are dropped without a word. One or two
+        terminals open, no error is raised, and the log claims four.
+
+        So the batch waits for the client's window before going on,
+        rather than spacing the launches out further and hoping. A longer
+        delay is only a longer guess, and it would slow down the ordinary
+        case where the client is already running and nothing needs
+        waiting for.
         """
+        from password_vault import clientready
+
         if not targets:
             return
         remaining = list(targets)
+        launched = []
         log.info("Opening %d SSH sessions with %s.",
                  len(remaining), client_name)
 
-        def step():
+        # Whether the *second* launch has to wait. False when this client
+        # gives every session its own process, and false when a
+        # single-instance client is already up -- the common case, where
+        # waiting would cost time for nothing.
+        state = {"waiting": clientready.wait_needed(client_name,
+                                                    client_path),
+                 "waited_ms": 0}
+        if state["waiting"]:
+            log.info("%s is not running yet; waiting for it before "
+                     "opening the rest.", client_name)
+
+        def still_going() -> bool:
             # A batch takes seconds to play out, and anything can happen
             # in them: the vault auto-locks, or the user quits. Both leave
             # the queued callbacks alive, and they would go on opening
             # sessions for a vault that is no longer unlocked.
             if not remaining or self.key is None:
                 self._batch_timer = None
+                return False
+            return True
+
+        def step():
+            if not still_going():
                 return
             target = remaining.pop(0)
             entry = target["entry"]
             self._launch_ssh(client_path, client_name, target["host"],
                              target["user"], target["port"],
                              entry.get("title", ""), entry)
-            if remaining:
+            launched.append(target["host"])
+            if not remaining:
+                self._batch_timer = None
+                log.info("Opened %d of %d sessions.", len(launched),
+                         len(targets))
+                return
+            if state["waiting"]:
+                self._batch_timer = self.root.after(
+                    clientready.READY_POLL_MS, wait_for_client)
+            else:
                 self._batch_timer = self.root.after(
                     BULK_SSH_STAGGER_MS, step)
-            else:
-                self._batch_timer = None
+
+        def wait_for_client():
+            if not still_going():
+                return
+            if clientready.has_window(client_path):
+                log.info("%s came up after %d ms.", client_name,
+                         state["waited_ms"])
+                state["waiting"] = False
+                self._batch_timer = self.root.after(
+                    BULK_SSH_STAGGER_MS, step)
+                return
+            state["waited_ms"] += clientready.READY_POLL_MS
+            if state["waited_ms"] >= clientready.READY_TIMEOUT_MS:
+                # Go ahead anyway. A slow machine should mean a slow
+                # start, not sessions silently abandoned -- and being
+                # wrong about readiness costs a dropped tab, while
+                # refusing costs the user the whole batch.
+                log.warning(
+                    "%s showed no window after %d ms; opening the "
+                    "remaining %d sessions regardless.", client_name,
+                    state["waited_ms"], len(remaining))
+                state["waiting"] = False
+                self._batch_timer = self.root.after(
+                    BULK_SSH_STAGGER_MS, step)
+                return
+            self._batch_timer = self.root.after(
+                clientready.READY_POLL_MS, wait_for_client)
 
         self.cancel_ssh_batch()
         step()
@@ -2818,6 +2886,7 @@ LAZY_MODULES = (
     "password_vault.import_1pux",
     "password_vault.import_json",
     "password_vault.import_profiles",
+    "password_vault.clientready",
     "password_vault.hostkeys",
     "password_vault.rdpcreds",
     "password_vault.sshkeys",

@@ -181,6 +181,44 @@ python -m pyflakes main.py password_vault tests
   it had `open_it` and no counterpart. Anything the app can open it
   should be able to close.
 
+- **Sessions that were reported as launched and never opened.** "When I
+  open three or four, sometimes one opens, sometimes two -- not the
+  number I asked for", with no error anywhere.
+
+  MobaXterm serves every tab from a single process. After the first
+  launch, each `-newtab` is not a start but a handoff to an instance that
+  is expected to already be running, and `subprocess.Popen` returns
+  successfully whether that instance is there to receive it or not. Open
+  a batch while MobaXterm is closed and the first launch begins a cold
+  start measured in seconds, while the handoffs behind it -- spaced 400ms
+  apart -- arrive at nothing and are dropped. The log said four. Two
+  terminals opened.
+
+  What made this worth measuring rather than guessing: with MobaXterm
+  already running, four launches 400ms apart all landed, four times out
+  of four, including with a real `ssh` in each tab. The spacing was never
+  the problem, so spacing them further apart would have been a longer
+  guess that happened to work more often. Being unable to tell whether
+  the client was up was the problem.
+
+  So the batch waits for evidence: a top-level window belonging to a
+  process running that client. Two details that only turned up by
+  testing against the real machine rather than a stub. Matching the full
+  executable path fails, because Windows 11 ships System32 stubs that
+  start a packaged copy living somewhere else -- so the name is what is
+  compared. And the question asked *before* the first launch is whether
+  the process exists, not whether it has a window, because MobaXterm can
+  sit in the notification area with no window while being perfectly able
+  to take a handoff; asking about the window there would mean waiting out
+  the whole timeout, on every batch, for a window that was never coming.
+
+  If the window never appears, the batch goes ahead anyway and says so in
+  the log. A slow machine should mean a slow start, not sessions
+  abandoned in silence: being wrong about readiness costs one dropped
+  tab, refusing costs the user the whole batch. The log now records how
+  many of how many opened, because "it launched them" was exactly the
+  claim that was false.
+
 - **Host key verification.** The app opens dozens of sessions with one
   domain account and never checked that the machine answering was the one
   that answered last time. It cannot verify during the session -- the

@@ -24,6 +24,7 @@ a = Analysis(
         'password_vault.import_1pux',
         'password_vault.import_json',
         'password_vault.import_profiles',
+        'password_vault.clientready',
         'password_vault.hostkeys',
         'password_vault.rdpcreds',
         'password_vault.sshkeys',
