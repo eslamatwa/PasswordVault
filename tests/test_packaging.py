@@ -111,6 +111,29 @@ class SpecTests(unittest.TestCase):
             "nothing proves a frozen build can reach them:\n  "
             + "\n  ".join(missing))
 
+    def test_the_installer_ships_the_version_the_app_reports(self):
+        """The number lives in two hand-kept places.
+
+        `password_vault/__init__.py` is what the About dialog shows and
+        what goes out in the update check's User-Agent; `setup.iss` is
+        what names the installer and what appears in Add/Remove Programs.
+        Nothing connected them, so bumping one and forgetting the other
+        ships an installer called 3.5 that reports 3.4 from inside -- and
+        the first place that turns up is a bug report where the version
+        the user quotes is not the version they are running.
+        """
+        import re
+
+        import password_vault
+
+        setup = (REPO / "setup.iss").read_text(encoding="utf-8")
+        found = re.search(r'#define\s+MyAppVersion\s+"([^"]+)"', setup)
+        self.assertIsNotNone(found, "no MyAppVersion in setup.iss")
+        self.assertEqual(
+            found.group(1), password_vault.APP_VERSION,
+            "setup.iss and password_vault.APP_VERSION disagree about "
+            "which version this is")
+
     def test_the_icon_is_still_shipped(self):
         self.assertIn("('icon.ico', '.')",
                       SPEC.read_text(encoding="utf-8"))
