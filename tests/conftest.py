@@ -142,8 +142,49 @@ _assert_log_is_sandboxed()
 
 HAS_DISPLAY = _display_available()
 
-requires_display = pytest.mark.skipif(
-    not HAS_DISPLAY, reason="no display available for Tk")
+# Most of this suite drives a real Tk application, and without a display
+# those tests skip. That is right on a headless machine and dangerous on
+# a build server: a run where everything skipped is green, reports
+# success, and has checked nothing -- the same shape as the three guards
+# in this project that turned out to be testing nothing at all.
+#
+# So CI sets this, and a missing display becomes a failure with a name
+# rather than several hundred quiet skips.
+REQUIRE_DISPLAY = os.environ.get("PASSWORDVAULT_REQUIRE_DISPLAY") == "1"
+
+if REQUIRE_DISPLAY and not HAS_DISPLAY:
+    raise RuntimeError(
+        "PASSWORDVAULT_REQUIRE_DISPLAY=1 is set but Tk cannot open a "
+        "display. Every windowed test would skip and the run would pass "
+        "while checking nothing.")
+
+# Two marks, not one. The skipif is what lets the suite run on a machine
+# with no display; the `display` marker is what lets CI run everything
+# *else* on its own, quickly, and know it really did exclude the windowed
+# tests rather than quietly skipping them.
+def pytest_configure(config):
+    """Declare the marker here rather than in a pytest.ini.
+
+    Adding an ini file to this repo turned a passing suite into 535
+    passes and 237 Tcl errors, reproducibly, three runs in a row -- the
+    shared Tk root stopped being creatable partway through. Removing the
+    file restored it. I could not explain the mechanism, and shipping a
+    config file whose effect I cannot account for is worse than not
+    having one: the marker only needs registering, and this registers
+    it.
+    """
+    config.addinivalue_line(
+        "markers",
+        "display: drives a real Tk window, so it needs one. Run the rest "
+        "with -m 'not display' -- a deselect is visible in the count, "
+        "while a skip on a headless build server looks like success.")
+
+
+requires_display = [
+    pytest.mark.display,
+    pytest.mark.skipif(not HAS_DISPLAY,
+                       reason="no display available for Tk"),
+]
 
 
 SAMPLE_VAULT = {

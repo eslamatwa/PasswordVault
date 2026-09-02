@@ -13,17 +13,29 @@ import os
 
 import pytest
 
-import main as main_module
+# `main` is imported inside the fixtures, never at module scope.
+#
+# Collection imports every test module before anything runs, so a
+# module-level `import main` would build the app's CustomTkinter global
+# state once at collection — and `_live_app` then clears `sys.modules`
+# and builds it again. That is the same module-identity trap `app_crypto`
+# and `app_widgets` exist for, and it is worth avoiding on its own.
+#
+# It is not, however, what caused the suite-wide Tcl failures that were
+# being chased when this comment was first written. That was stale
+# bytecode from two throwaway plugin files. Recorded so the next person
+# does not read a fix into a precaution.
 
-# No display needed: detection and command building are both static, and
-# keeping them off the Tk path makes them fast and immune to the flaky
-# interpreter start-up that plagues the windowed tests here.
-VAULT = main_module.PasswordVault
+
+def _vault():
+    import main
+
+    return main.PasswordVault
 
 
 @pytest.fixture
 def detect():
-    return VAULT._detect_ssh_clients
+    return _vault()._detect_ssh_clients
 
 
 def _names(clients):
@@ -55,6 +67,8 @@ class TestPuttyIsFound:
         """winget puts a shim in its Links folder and on PATH, nowhere
         near Program Files. This is the case that was missing."""
         monkeypatch.setattr(os.path, "isfile", lambda _p: False)
+        import main as main_module
+
         monkeypatch.setattr(
             main_module.shutil, "which",
             lambda name: r"C:\shims\putty.exe" if name == "putty" else None)
@@ -65,6 +79,8 @@ class TestPuttyIsFound:
                                                   monkeypatch):
         """The opposite failure: offering a client that is not there
         means a dropdown entry that cannot start anything."""
+        import main as main_module
+
         monkeypatch.setattr(os.path, "isfile", lambda _p: False)
         monkeypatch.setattr(main_module.shutil, "which", lambda _n: None)
         assert "PuTTY" not in _names(detect())
@@ -111,7 +127,7 @@ class TestEveryClientCanBeLaunched:
         silently fall through to the Windows SSH branch."""
         monkeypatch.setattr(os.path, "isfile", lambda _p: True)
         for name, path in detect():
-            cmd = VAULT.ssh_command(name, path, "10.0.0.5", "root", 22)
+            cmd = _vault().ssh_command(name, path, "10.0.0.5", "root", 22)
             assert cmd, f"{name} produced no command"
             assert any(path in str(part) or "cmd" == part
                        for part in cmd), f"{name}: {cmd}"

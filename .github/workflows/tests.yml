@@ -1,0 +1,102 @@
+name: tests
+
+# Windows only, and that is not a limitation to work around: the app
+# calls RegisterHotKey, SendInput and GetForegroundWindow through ctypes,
+# and half the suite drives a real Tk window. A Linux job would pass by
+# skipping the parts that matter.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Everything that does not need a window: key parsing, hotkey parsing,
+  # typing sequences, window matching, settings, crypto, imports. Fast
+  # enough to tell you within a minute whether the logic still holds.
+  logic:
+    name: logic (py${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two versions on purpose. Two sessions of this project disagreed
+        # about whether unlocking frees the UI thread, and the answer
+        # turned out to depend on the interpreter and the cryptography
+        # build. One version in CI cannot see a disagreement like that.
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint
+        run: python -m pyflakes main.py password_vault tests tools
+      - name: Tests that need no window
+        # Deselected by marker, not skipped: a deselect shows up in the
+        # count as "234 deselected", while a skip on a headless machine
+        # looks exactly like success.
+        run: python -m pytest tests -q -m "not display" -p no:cacheprovider
+      - name: Which cryptography, and does PBKDF2 free the main thread
+        # Recorded on every run, because this is the measurement the two
+        # sessions disagreed about and it is a property of the library
+        # rather than of our code.
+        run: python tools/gil_check.py
+
+  # The whole thing, windows and all. Slower and the one that can catch a
+  # dialog that no longer opens.
+  full:
+    name: full suite
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Full suite
+        # PASSWORDVAULT_REQUIRE_DISPLAY turns "no display" from several
+        # hundred quiet skips into one loud failure. A green run that
+        # skipped everything is the exact shape of the guards this
+        # project has already found doing nothing.
+        run: python -m pytest tests -q -p no:cacheprovider
+        env:
+          PASSWORDVAULT_REQUIRE_DISPLAY: "1"
+      - name: Self-test the lazy imports
+        run: python main.py --self-test
+
+  # A build is the only way to find a module the spec forgot, because
+  # every dialog here is imported inside the handler that opens it.
+  build:
+    name: build
+    runs-on: windows-latest
+    needs: [logic]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+      - name: Build
+        run: python -m PyInstaller PasswordVault.spec --noconfirm --clean
+      - name: The built exe resolves every lazy module
+        run: .\dist\PasswordVault.exe --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PasswordVault-exe
+          path: dist/PasswordVault.exe
+          retention-days: 14

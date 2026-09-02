@@ -638,6 +638,22 @@ one and is in *Done* above. The next candidates, none started:
 
 ## Remaining — smaller, known and deliberate
 
+- **237 tests hang off one shared Tk root.** `_live_app` is session
+  scoped, so anything that stops it being created fails every windowed
+  test at once — with a Tcl message about `init.tcl` that names neither
+  the cause nor a file anywhere near it. Chasing one of those took six
+  wrong hypotheses before the answer turned out to be stale bytecode from
+  two throwaway plugin files.
+
+  The fragility is worth recording separately from that particular bug.
+  A failure that takes out half the suite and points nowhere is expensive
+  regardless of what caused it, and the identical counts it produces —
+  535 passed, 237 errors, every time — actively mislead: they look like
+  evidence of a deterministic cause when they only show that one fixture
+  is upstream of everything.
+
+
+
 - **Whether unlock frees the window depends on the `cryptography`
   version.** Key derivation was moved off the Tk thread so the login window
   would keep painting. Structurally that landed everywhere: `unlock()`
