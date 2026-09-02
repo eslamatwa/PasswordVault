@@ -2,7 +2,7 @@
 
 A modern, secure, and elegant password manager for Windows — built with **Python** and **CustomTkinter** in Apple design style, with both light and dark themes.
 
-**Version:** 3.4 | **Developer:** Eslam Atwa
+**Version:** 3.5 | **Developer:** Eslam Atwa
 
 ---
 

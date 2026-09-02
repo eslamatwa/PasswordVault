@@ -1,5 +1,5 @@
 ================================================================
-       Password Vault v3.4 — Feature List
+       Password Vault v3.5 — Feature List
        Developer: Eslam Atwa
 ================================================================
 
